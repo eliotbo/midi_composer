@@ -1,0 +1,12 @@
+[package]
+name = "midi_composer"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+iced = { path = "iced", features = ["canvas", "debug"] }
+iced_native = { path = "iced/native" }
+# rustysynth = { path = "rustysynth/rustysynth" }
+midly = { path = "midly" }

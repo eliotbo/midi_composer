@@ -1,15 +1,3 @@
-//! Midi track
-//!
-
-// use iced::widget::{
-//     // column,
-//     container,
-//     // button, checkbox,  horizontal_space, pick_list, row,
-//     // slider, text,
-// };
-
-// use iced::Length;
-
 pub use iced_native;
 
 use iced::widget::canvas::event::{self, Event};
@@ -28,11 +16,7 @@ use crate::midi_notes::{
 };
 use crate::piano_theme::PianoTheme;
 
-pub const BEAT_SIZE: f32 = 60.0;
-pub const NOTE_SIZE: f32 = 15.0;
-
-pub const MIN_SCALING: Vector = Vector::new(0.1, 0.1);
-pub const MAX_SCALING: Vector = Vector::new(2.0, 2.0);
+use crate::config::{BEAT_SIZE, INIT_GRID_SIZE, INIT_SCALING, MAX_SCALING, MIN_SCALING, NOTE_SIZE};
 
 pub type TrackElement<'a> = iced::Element<'a, TrackMessage, iced::Renderer<PianoTheme>>;
 
@@ -142,8 +126,6 @@ impl Track {
                 match change_selection {
                     ChangeSelection::DrainSelect => {
                         self.selected.notes.drain(&mut self.midi_notes);
-                        // println!("main: {:?}", self.midi_notes);
-                        // println!("selected: {:?}", self.selected.notes);
                     }
                     ChangeSelection::SelectAll => {
                         self.midi_notes.drain(&mut self.selected.notes);
@@ -171,6 +153,7 @@ impl Track {
                         self.selected.notes.add_midi_notes(removed_notes);
                     }
                 };
+                println!();
                 println!("main: {:?}", self.midi_notes);
                 println!("selected: {:?}", self.selected.notes);
                 self.selected.selecting_square = None;
@@ -231,68 +214,6 @@ impl Track {
                 self.selected.selecting_square = Some(selecting_square);
                 self.selection_square_cache.clear();
             } //
-              //// TrackMessage::FinishSelecting { selecting_square } => {
-              // println!("finish selecting: {:?}", self.selected.notes);
-
-              // let note_indices = self.midi_notes.get_notes_in_rect(selecting_square);
-              // println!("note_indices: {:?}", note_indices);
-
-              // // Get all the notes that overlap with the selecting square
-              // let notes_to_select = self
-              //     .midi_notes
-              //     .notes
-              //     .iter()
-              //     .enumerate()
-              //     .flat_map(|(pitch_index, notes)| {
-              //         notes
-              //             .iter()
-              //             .enumerate()
-              //             .filter_map(move |(time_index, note)| {
-              //                 if note.overlaps_with(&selecting_square) {
-              //                     Some(NoteIndex { pitch_index, time_index })
-              //                 } else {
-              //                     None
-              //                 }
-              //             })
-              //             .collect::<Vec<NoteIndex>>()
-              //     })
-              //     .collect::<Vec<NoteIndex>>();
-
-              // if notes_to_select.is_empty() {
-              //     let selected_notes = self.selected.notes.clone();
-              //     self.midi_notes.add_midi_notes(selected_notes);
-
-              //     self.selected.selecting_square = None;
-              //     self.selected.notes.clear();
-              //     self.selection_square_cache.clear();
-              //     self.notes_cache.clear();
-              //     self.selected_notes_cache.clear();
-              //     return;
-              // }
-
-              // // if the control key is pressed, keep the previously selected notes
-              // if !self.modifiers.control() {
-              //     self.selected.notes.clear();
-              // }
-
-              // // Add the notes to the Selected notes
-              // notes_to_select.iter().for_each(|note_index| {
-              //     let note = self.midi_notes.notes[note_index.pitch_index][note_index.time_index]
-              //         .clone();
-              //     self.selected.notes.add(note);
-              // });
-
-              // // delete the selected notes from self.midi_notes
-              // self.midi_notes.remove_notes(notes_to_select);
-              // // notes_to_select.iter().for_each(|(pitch_index, time_index)| {
-              // //     self.midi_notes.notes[*pitch_index].remove(*time_index);
-              // // });
-
-              // self.selected.selecting_square = None;
-              // self.selection_square_cache.clear();
-              // self.notes_cache.clear();
-              // self.selected_notes_cache.clear();
-              // }
         }
     }
 }

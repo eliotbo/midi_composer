@@ -27,8 +27,10 @@ pub use grid::Grid;
 mod midi_notes;
 // use midi_notes::MidiNote;
 
-pub const INIT_SCALING: Vector = Vector::new(1.0, 1.0);
-pub const INIT_GRID_SIZE: Size = Size::new(500.0, 300.0);
+mod config;
+mod scale;
+
+use crate::config::INIT_GRID_SIZE;
 
 // TODO: make my own Vector type that is compatible with element-wise operations
 //

@@ -1,16 +1,14 @@
 //! midi notes
 
 use crate::grid::Grid;
-use crate::track::{TimingInfo, BEAT_SIZE, NOTE_SIZE};
+use crate::track::TimingInfo;
 
 use iced::widget::canvas::{Cache, Cursor, Geometry, Path, Stroke};
 use iced::{Color, Point, Rectangle, Size, Vector};
 
 use std::fmt;
 
-const RESIZE_BOX_PIXEL_WIDTH: f32 = 5.0;
-pub static NOTE_LABELS: [&'static str; 12] =
-    ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+use crate::config::{BEAT_SIZE, NOTE_LABELS, NOTE_SIZE, RESIZE_BOX_PIXEL_WIDTH};
 
 #[derive(Clone, Default)]
 pub struct MidiNotes {
@@ -59,7 +57,6 @@ impl fmt::Debug for MidiNotes {
             ));
         });
 
-        // write!(f, "MidiNotes [\n {non_empty_pitch_vecs:#?} \n]")
         write!(f, "MidiNotes [\n{}]", debug_string)
     }
 }
@@ -217,7 +214,7 @@ impl MidiNotes {
             white_notes.reverse();
 
             for row in region.rows() {
-                let pitch_relative_to_grid = (12 * 11 - row) as usize;
+                let pitch_relative_to_grid = (132 - row) as usize;
 
                 let maybe_note_vec = self.notes.get(pitch_relative_to_grid);
 
@@ -501,8 +498,9 @@ impl Selected {
                 frame.translate(grid.translation);
                 frame.scale(Vector::new(BEAT_SIZE, -NOTE_SIZE));
 
+                // the pitch goes up in the up direction, but the y coordinate goes up in the down direction
                 let relative_position =
-                    Point::new(select.position().x, -132.0 + select.position().y);
+                    Point::new(select.position().x, -(132.0 - select.position().y));
 
                 // println!("selecting square: {:?}", relative_position);
 

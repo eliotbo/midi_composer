@@ -3,11 +3,10 @@ use iced::widget::canvas::{Cache, Cursor, Frame, Geometry, Text};
 use iced::{alignment, Color, Point, Rectangle, Size, Vector};
 // use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::midi_notes::NOTE_LABELS;
-use crate::track::{BEAT_SIZE, NOTE_SIZE};
-use crate::{INIT_GRID_SIZE, INIT_SCALING};
 use std::ops::RangeInclusive;
 
+use crate::config::{BEAT_SIZE, INIT_GRID_SIZE, INIT_SCALING, NOTE_LABELS, NOTE_SIZE};
+use crate::scale::Scale;
 // use crate::piano_theme::PianoTheme;
 // use crate::track::TrackMessage;
 
@@ -16,6 +15,7 @@ pub struct Grid {
     pub translation: Vector,
     pub scaling: Vector,
     pub max_beats: usize,
+    pub scale: Scale,
 }
 
 impl Default for Grid {
@@ -27,6 +27,7 @@ impl Default for Grid {
             ),
             scaling: INIT_SCALING,
             max_beats: 100,
+            scale: Scale::default(),
         }
     }
 }
@@ -246,7 +247,7 @@ impl Grid {
         //
         let lower_pitch_bound = -bounds.height / 2.0 / scaling.y - NOTE_SIZE * 5.0;
 
-        let higher_pitch_bound = bounds.height / 2.0 / scaling.y - NOTE_SIZE * 12.0 * 11.0; // 11 octaves
+        let higher_pitch_bound = bounds.height / 2.0 / scaling.y - NOTE_SIZE * 132.0;
 
         if new_translation.y < higher_pitch_bound {
             new_translation.y = higher_pitch_bound;

@@ -12,7 +12,7 @@ use iced::widget::{
 use iced::window;
 
 use iced::alignment;
-use iced::{Application, Command, Length, Settings, Size, Vector};
+use iced::{Application, Command, Length, Settings};
 pub use iced_native;
 
 pub mod piano_theme;

@@ -38,7 +38,7 @@ pub enum ScaleType {
 
 impl Default for Scale {
     fn default() -> Self {
-        Scale::new(ScaleType::Major, 0)
+        Scale::new(ScaleType::Minor, 2)
     }
 }
 
@@ -48,7 +48,7 @@ impl Scale {
         Scale { scale_type, root, midi_range }
     }
 
-    fn get_base_notes(scale_type: &ScaleType, root: u8) -> Vec<u8> {
+    pub fn get_base_notes(scale_type: &ScaleType, root: u8) -> Vec<u8> {
         match scale_type {
             ScaleType::Major => vec![0, 2, 4, 5, 7, 9, 11],
             ScaleType::Minor => vec![0, 2, 3, 5, 7, 8, 10],
@@ -88,7 +88,11 @@ impl Scale {
         range
     }
 
-    pub fn size(&self) -> usize {
+    pub fn midi_size(&self) -> usize {
         self.midi_range.len()
+    }
+
+    pub fn size(&self) -> u8 {
+        Self::get_base_notes(&self.scale_type, self.root).len() as u8
     }
 }

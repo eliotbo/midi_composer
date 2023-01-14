@@ -204,7 +204,7 @@ impl MidiNotes {
             frame.translate(center);
             frame.scale(grid.scaling);
             frame.translate(grid.translation);
-            frame.scale(Vector::new(BEAT_SIZE, NOTE_SIZE));
+            frame.scale(Vector::new(BEAT_SIZE, -NOTE_SIZE));
 
             let region = grid.visible_region(frame.size());
 

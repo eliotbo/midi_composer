@@ -1,33 +1,31 @@
-// use iced::widget::canvas::event::Event;
 use iced::widget::canvas::{Cache, Cursor, Frame, Geometry, Text};
 use iced::{alignment, Color, Point, Rectangle, Size, Vector};
-// use rustc_hash::{FxHashMap, FxHashSet};
 
 use std::ops::RangeInclusive;
 
 use crate::config::{BEAT_SIZE, INIT_GRID_SIZE, INIT_SCALING, NOTE_LABELS, NOTE_SIZE};
 use crate::scale::Scale;
-// use crate::piano_theme::PianoTheme;
-// use crate::track::TrackMessage;
 
 #[derive(Clone)]
 pub struct Grid {
     pub translation: Vector,
-    pub scaling: Vector,
+    pub scaling: Vector, // geometrical scale
     pub max_beats: usize,
-    pub scale: Scale,
+    pub scale: Scale, // musical scale
 }
 
 impl Default for Grid {
     fn default() -> Self {
+        let scale = Scale::default();
+
         Self {
             translation: Vector::new(
                 -INIT_GRID_SIZE.width / 2.0 - BEAT_SIZE,
-                -INIT_GRID_SIZE.height / 2.0 - NOTE_SIZE * 67.0,
+                -1.0 * INIT_GRID_SIZE.height / 2.0 - NOTE_SIZE * 1.0,
             ),
             scaling: INIT_SCALING,
             max_beats: 100,
-            scale: Scale::default(),
+            scale,
         }
     }
 }
@@ -40,23 +38,19 @@ impl Grid {
             Point::new(point.x / self.scaling.x + region.x, point.y / self.scaling.y + region.y);
 
         let x = projection.x / BEAT_SIZE as f32;
-        let y = 132.0 - projection.y / NOTE_SIZE as f32;
+        let y = projection.y / NOTE_SIZE as f32;
 
         Point::new(x, y)
     }
-    pub fn draw_background(
-        &self,
-        bounds: Rectangle,
-        // cursor: Cursor,
-        grid_cache: &Cache,
-    ) -> Geometry {
+    pub fn draw_background(&self, bounds: Rectangle, grid_cache: &Cache) -> Geometry {
         let center = Vector::new(bounds.width / 2.0, bounds.height / 2.0);
 
         let grid = grid_cache.draw(bounds.size(), |frame| {
+            let negative_translation = Vector::new(self.translation.x, -self.translation.y);
             frame.translate(center);
             frame.scale(self.scaling);
-            frame.translate(self.translation);
-            frame.scale(Vector::new(BEAT_SIZE, NOTE_SIZE));
+            frame.translate(negative_translation);
+            frame.scale(Vector::new(BEAT_SIZE, -NOTE_SIZE));
 
             let region = self.visible_region(frame.size());
 
@@ -71,26 +65,28 @@ impl Grid {
 
             let text_size = 14.0;
 
-            let mut note_colors =
+            let note_colors =
                 vec![true, false, true, false, true, true, false, true, false, true, false, true];
 
-            note_colors.reverse();
-
             let alpha = 0.25;
+            let full_midi_range = &self.scale.midi_range;
 
             for row in region.rows() {
+                let note_index = full_midi_range[row as usize];
+
                 let pos = Point::new(*columns.start() as f32, row as f32);
                 frame.fill_rectangle(pos, Size::new(total_columns as f32, note_linewidth), color);
 
-                let note_color = if note_colors[row as usize % 12] {
-                    Color::from_rgba8(100, 100, 100, alpha)
-                } else {
-                    Color::from_rgba8(10, 10, 10, alpha)
+                let mut note_color = Color::from_rgba8(100, 100, 100, alpha);
+
+                if !note_colors[note_index as usize % 12] {
+                    note_color = Color::from_rgba8(10, 10, 10, alpha);
                 };
 
                 frame.fill_rectangle(pos, Size::new(total_columns as f32, 1.0), note_color);
 
-                if row as i32 % 12 == 11 {
+                if (note_index as i32) % 12 == 0 {
+                    // if true {
                     let text_pos = Point::new(
                         region.x / BEAT_SIZE as f32 + text_size * 0.2 / self.scaling.y / BEAT_SIZE,
                         row as f32 + 0.5,
@@ -105,9 +101,13 @@ impl Grid {
                         ..Text::default()
                     };
 
-                    let note_name = NOTE_LABELS[11 - row as usize % 12];
+                    let note_name = NOTE_LABELS[note_index as usize % 12];
                     frame.fill_text(Text {
-                        content: format!("{}{}", note_name, 8.0 - (row as f32 / 12.0).floor()),
+                        content: format!(
+                            "{}{}",
+                            note_name,
+                            -2.0 + (note_index as f32 / 12 as f32).floor()
+                        ),
                         ..note_label
                     });
                 }
@@ -154,25 +154,6 @@ impl Grid {
                 .position_in(&bounds)
                 .map(|position| Cell::at(self.project(position, frame.size())));
 
-            // // show hovered cell with a transparent overlay
-            // if let Some(cell) = hovered_cell.clone() {
-            //     frame.with_save(|frame| {
-            //         frame.translate(center);
-            //         frame.scale(self.scaling);
-            //         frame.translate(self.translation);
-            //         frame.scale(Vector::new(BEAT_SIZE, NOTE_SIZE));
-
-            //         frame.fill_rectangle(
-            //             Point::new(cell.j as f32, cell.i as f32),
-            //             Size::UNIT,
-            //             Color {
-            //                 a: 0.5,
-            //                 ..Color::BLACK
-            //             },
-            //         );
-            //     });
-            // }
-
             let text = Text {
                 color: Color::WHITE,
                 size: 14.0,
@@ -199,14 +180,12 @@ impl Grid {
     pub fn visible_region(&self, size: Size) -> Region {
         let width = size.width / self.scaling.x;
         let height = size.height / self.scaling.y;
-        // let beat_size = BEAT_SIZE / self.scaling.x;
-        // let note_size = NOTE_SIZE / self.scaling.y;
 
         Region {
             x: -self.translation.x - width / 2.0,
             y: -self.translation.y - height / 2.0,
             width,
-            height,
+            height: height,
         }
     }
 
@@ -245,9 +224,10 @@ impl Grid {
         // Because MIDI is represented with 7 bits (0-127),
         // there are 5 missing notes in the 11th octabe
         //
-        let lower_pitch_bound = -bounds.height / 2.0 / scaling.y - NOTE_SIZE * 5.0;
+        let lower_pitch_bound = -bounds.height / 2.0 / scaling.y - NOTE_SIZE * 0.0;
 
-        let higher_pitch_bound = bounds.height / 2.0 / scaling.y - NOTE_SIZE * 132.0;
+        let higher_pitch_bound =
+            bounds.height / 2.0 / scaling.y - NOTE_SIZE * self.scale.midi_range.len() as f32;
 
         if new_translation.y < higher_pitch_bound {
             new_translation.y = higher_pitch_bound;
@@ -283,13 +263,14 @@ impl Cell {
     }
 
     pub fn to_editor_axes(position: Point) -> Point {
-        let i = 132.0 - position.y / NOTE_SIZE as f32;
+        let i = position.y / NOTE_SIZE as f32;
         let j = position.x / BEAT_SIZE as f32;
 
         Point::new(j, i)
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Region {
     pub x: f32,
     pub y: f32,
@@ -300,17 +281,13 @@ pub struct Region {
 impl Region {
     pub fn rows(&self) -> RangeInclusive<isize> {
         let first_row = (self.y / NOTE_SIZE as f32).floor() as isize;
-
         let visible_rows = (self.height / NOTE_SIZE as f32).ceil() as isize;
-
         first_row..=first_row + visible_rows
     }
 
     pub fn columns(&self) -> RangeInclusive<isize> {
         let first_column = (self.x / BEAT_SIZE as f32).floor() as isize;
-
         let visible_columns = (self.width / BEAT_SIZE as f32).ceil() as isize;
-
         first_column..=first_column + visible_columns
     }
 

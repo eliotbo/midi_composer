@@ -16,7 +16,7 @@ use crate::midi_notes::{
 };
 use crate::piano_theme::PianoTheme;
 
-use crate::config::{BEAT_SIZE, INIT_GRID_SIZE, INIT_SCALING, MAX_SCALING, MIN_SCALING, NOTE_SIZE};
+use crate::config::{MAX_SCALING, MIN_SCALING};
 
 pub type TrackElement<'a> = iced::Element<'a, TrackMessage, iced::Renderer<PianoTheme>>;
 

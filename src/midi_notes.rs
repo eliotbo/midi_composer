@@ -9,6 +9,7 @@ use iced::{Color, Point, Rectangle, Size, Vector};
 use std::fmt;
 
 use crate::config::{BEAT_SIZE, NOTE_LABELS, NOTE_SIZE, RESIZE_BOX_PIXEL_WIDTH};
+use crate::scale::Scale;
 
 #[derive(Clone, Default)]
 pub struct MidiNotes {
@@ -192,51 +193,58 @@ impl MidiNotes {
         notes_cache: &Cache,
         color: Color,
     ) -> Geometry {
-        let center = Vector::new(bounds.width / 2.0, bounds.height / 2.0);
-
         let notes = notes_cache.draw(bounds.size(), |frame| {
             let mut color = color;
 
-            let maybe_projected_cursor = cursor
-                .position_in(&bounds)
-                .map(|position| grid.to_track_axes(position, &frame.size()));
-
-            frame.translate(center);
-            frame.scale(grid.scaling);
-            frame.translate(grid.translation);
-            frame.scale(Vector::new(BEAT_SIZE, -NOTE_SIZE));
+            grid.adjust_frame(frame, &bounds.size());
 
             let region = grid.visible_region(frame.size());
+
+            let maybe_projected_cursor =
+            // beware: position_in(&bounds) returns a translated position relative to the bounds
+                cursor.position_in(&bounds).map(|position| grid.to_track_axes(position, &frame.size()));
 
             let mut white_notes =
                 vec![true, false, true, false, true, true, false, true, false, true, false, true];
 
             white_notes.reverse();
 
+
+
             for row in region.rows() {
-                let pitch_relative_to_grid = (132 - row) as usize;
+
+
+                // let pitch_relative_to_grid = row as usize;
+                let pitch_relative_to_grid =  grid.scale.midi_range[row as usize] as usize;
 
                 let maybe_note_vec = self.notes.get(pitch_relative_to_grid);
 
-                if maybe_note_vec.is_none() {
+                if maybe_note_vec.is_none() || maybe_note_vec.unwrap().is_empty() {
                     continue;
                 }
 
+                // println!("\n\nrow  : {}, \npitch: {}", row, pitch_relative_to_grid);
+
                 for note in maybe_note_vec.unwrap().iter() {
                     //
-                    let pos = Point::new(note.start as f32, row as f32 - 1.0);
+                    let pos = Point::new(note.start as f32, row as f32);
                     let note_len = note.end - note.start;
 
-                    // let mut note_color = Color::from_rgba8(180, 190, 10, 1.0);
+
 
                     let pos2 = Point::new(note.start as f32, pitch_relative_to_grid as f32);
                     let note_rect = Rectangle::new(pos2, Size::new(note_len as f32, 1.0));
 
+                    // println!("projected_cursor: {:?}", maybe_projected_cursor);
+
                     if let Some(projected_cursor) = maybe_projected_cursor {
-                        // println! {"projected_cursor: {:?}", projected_cursor};
-                        // println!("note_rect: {:?}", note_rect);
-                        if note_rect.contains(projected_cursor) {
+
+                        let scale_adjusted_proj_cursor = grid.adjust_to_music_scale(projected_cursor);
+
+                        if note_rect.contains(scale_adjusted_proj_cursor) {
                             color.a = 0.5;
+                        } else {
+                            color.a = 1.0;
                         }
                     }
 
@@ -363,10 +371,9 @@ impl MidiNotes {
             })
             .collect();
 
-        println!();
+        // println!();
         // println!("rect: {:?}", rect);
         // println!("potential_pitch_vec: {:?}", potential_pitch_vec);
-
         // println!("notes_filtered_by_pitch: {:?}", notes_filtered_by_pitch);
 
         note_indices
@@ -475,12 +482,19 @@ impl MidiNote {
 
         false
     }
+
+    pub fn to_label(&self) -> String {
+        format!("pitch label: {}", self.pitch.to_str())
+    }
 }
 
 #[derive(Clone, Default)]
 pub struct Selected {
     pub notes: MidiNotes,
     pub selecting_square: Option<Rectangle>,
+    // the direct_selecting_square is not adjusted to the music scale,
+    // thus making it useful only for drawing.
+    pub direct_selecting_square: Option<Rectangle>,
 }
 
 impl Selected {
@@ -491,21 +505,11 @@ impl Selected {
         selection_square_cache: &Cache,
     ) -> Geometry {
         selection_square_cache.draw(bounds.size(), |frame| {
-            if let Some(select) = self.selecting_square {
-                let center = Vector::new(bounds.width / 2.0, bounds.height / 2.0);
-                frame.translate(center);
-                frame.scale(grid.scaling);
-                frame.translate(grid.translation);
-                frame.scale(Vector::new(BEAT_SIZE, -NOTE_SIZE));
-
-                // the pitch goes up in the up direction, but the y coordinate goes up in the down direction
-                let relative_position =
-                    Point::new(select.position().x, -(132.0 - select.position().y));
-
-                // println!("selecting square: {:?}", relative_position);
+            if let Some(select) = self.direct_selecting_square {
+                grid.adjust_frame(frame, &bounds.size());
 
                 frame.stroke(
-                    &Path::rectangle(relative_position, select.size()),
+                    &Path::rectangle(Point::new(select.x, select.y), select.size()),
                     Stroke::default().with_width(2.0),
                 );
             }
@@ -560,6 +564,29 @@ impl Pitch {
     //     unimplemented!("TODO: See MIDI specs");
     // }
 
+    pub fn to_str(&self) -> String {
+        let octave = self.0 / 12 - 2;
+        let note = self.0 % 12;
+
+        let note_name = match note {
+            0 => "C",
+            1 => "C#",
+            2 => "D",
+            3 => "D#",
+            4 => "E",
+            5 => "F",
+            6 => "F#",
+            7 => "G",
+            8 => "G#",
+            9 => "A",
+            10 => "A#",
+            11 => "B",
+            _ => "C",
+        };
+
+        format!("{}{}", note_name, octave)
+    }
+
     // parses the note name (ex: "C#6")
     pub fn from_str(s: &str) -> Self {
         let note_name =
@@ -600,7 +627,7 @@ pub enum NoteInteraction {
 
     Resizing { initial_cursor_pos: Point, original_notes: MidiNotes, resize_end: NoteEdge },
     ResizingHover,
-    Selecting { initial_cursor_pos: Point },
+    Selecting { initial_music_cursor: Point, initial_cursor_proj: Point },
 }
 
 impl Default for NoteInteraction {

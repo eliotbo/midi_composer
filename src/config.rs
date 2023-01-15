@@ -12,3 +12,5 @@ pub const MAX_SCALING: Vector = Vector::new(2.0, 2.0);
 
 pub const INIT_SCALING: Vector = Vector::new(1.0, 1.0);
 pub const INIT_GRID_SIZE: Size = Size::new(500.0, 300.0);
+
+pub const INIT_PITCH_POS: f32 = 27.0;

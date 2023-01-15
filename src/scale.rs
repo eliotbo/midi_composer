@@ -62,6 +62,11 @@ impl Scale {
         .collect()
     }
 
+    pub fn set_scale_type(&mut self, scale_type: ScaleType) {
+        self.scale_type = scale_type;
+        self.midi_range = Self::make_filtered_midi_range(&self.scale_type, self.root);
+    }
+
     // from C-2 tp C8
     fn make_filtered_midi_range(scale_type: &ScaleType, root: u8) -> Vec<u8> {
         let base_notes = Self::get_base_notes(scale_type, root);

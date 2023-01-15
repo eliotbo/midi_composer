@@ -2,8 +2,10 @@
 //!
 use iced::executor;
 use iced::widget::{
+    button,
     // column,
     container,
+    text,
     // checkbox,
     // horizontal_space, pick_list, row,
     // slider, text,
@@ -122,7 +124,16 @@ impl Application for MidiEditor {
         //     content.push(editor_canvas);
         // }
 
-        let elements: Vec<EditorElement> = self
+        let button = |label| {
+            button(text(label).horizontal_alignment(alignment::Horizontal::Center))
+                .padding(10)
+                .width(Length::Units(80))
+        };
+
+        let toggle_button =
+            button("Toggle").on_press(EditorMessage::Track(1, TrackMessage::Toggle));
+
+        let mut elements: Vec<EditorElement> = self
             .tracks
             .iter()
             .enumerate()
@@ -133,6 +144,8 @@ impl Application for MidiEditor {
                 editor_canvas
             })
             .collect();
+
+        elements.push(toggle_button.into());
 
         let content = Column::with_children(elements).spacing(15);
 

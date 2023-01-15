@@ -3,8 +3,13 @@ use iced::{alignment, Color, Point, Rectangle, Size, Vector};
 
 use std::ops::RangeInclusive;
 
-use crate::config::{BEAT_SIZE, INIT_GRID_SIZE, INIT_SCALING, NOTE_LABELS, NOTE_SIZE};
+use crate::config::{
+    BEAT_SIZE, INIT_GRID_SIZE, INIT_PITCH_POS, INIT_SCALING, NOTE_LABELS, NOTE_SIZE,
+};
 use crate::scale::Scale;
+
+pub const IS_WHITE_KEY: [bool; 12] =
+    [true, false, true, false, true, true, false, true, false, true, false, true];
 
 #[derive(Clone)]
 pub struct Grid {
@@ -21,7 +26,8 @@ impl Default for Grid {
         Self {
             translation: Vector::new(
                 -INIT_GRID_SIZE.width / 2.0 - BEAT_SIZE,
-                -1.0 * INIT_GRID_SIZE.height / 2.0 - NOTE_SIZE * 1.0,
+                // -1.0 * INIT_GRID_SIZE.height / 2.0 - NOTE_SIZE * 1.0,
+                -1.0 * INIT_GRID_SIZE.height / 2.0 - NOTE_SIZE * INIT_PITCH_POS,
             ),
             scaling: INIT_SCALING,
             max_beats: 100,
@@ -31,26 +37,62 @@ impl Default for Grid {
 }
 
 impl Grid {
-    pub fn to_track_axes(&self, point: Point, size: &Size) -> Point {
-        let region = self.visible_region(*size);
+    // pub fn to_track_axes(&self, point: Point, size: &Size) -> Point {
+    //     let region = self.visible_region(*size);
 
-        let projection =
-            Point::new(point.x / self.scaling.x + region.x, point.y / self.scaling.y + region.y);
+    //     let projection =
+    //         Point::new(point.x / self.scaling.x + region.x, point.y / self.scaling.y + region.y);
 
-        let x = projection.x / BEAT_SIZE as f32;
-        let y = projection.y / NOTE_SIZE as f32;
+    //     let x = projection.x / BEAT_SIZE as f32;
+    //     let y = 127.0 - projection.y / NOTE_SIZE as f32;
 
-        Point::new(x, y)
+    //     Point::new(x, y)
+    // }
+
+    // pub fn to_track_axes(&self, point: Point, region: &Region) -> Point {
+    // pub fn to_track_axes(&self, point: Point, size: &Size) -> Point {
+
+    pub fn to_track_axes(&self, point: Point, frame_size: &Size) -> Point {
+        let region = self.visible_region(*frame_size);
+
+        // between 0 and 1.
+        // The y axis is inverted, so the 0 value is at the bottom of the screen
+        let mut cursor_normalized =
+            Point::new(point.x / frame_size.width, 1.0 - point.y / frame_size.height);
+
+        // relative to frame axes
+        cursor_normalized.x = region.x + cursor_normalized.x * frame_size.width / self.scaling.x;
+        cursor_normalized.y = region.y + cursor_normalized.y * frame_size.height / self.scaling.y;
+
+        // relative to grid units
+        cursor_normalized.x /= BEAT_SIZE as f32;
+        cursor_normalized.y /= NOTE_SIZE as f32;
+
+        cursor_normalized
     }
-    pub fn draw_background(&self, bounds: Rectangle, grid_cache: &Cache) -> Geometry {
-        let center = Vector::new(bounds.width / 2.0, bounds.height / 2.0);
 
+    // Takes in a point (ex: cursor position) and modifies it accodring to the music scale.
+    // If the scale is chromatic, nothing changes, but if the scale is anything else, the
+    // y value will skip over notes that are not in the scale.
+    pub fn adjust_to_music_scale(&self, mut point: Point) -> Point {
+        let y_whole = point.y.floor();
+        let y_frac = point.y - y_whole;
+        point.y = self.scale.midi_range[y_whole as usize] as f32 + y_frac;
+        point
+    }
+
+    pub fn adjust_frame(&self, frame: &mut Frame, size: &Size) {
+        let negative_translation = Vector::new(self.translation.x, -self.translation.y);
+        let center = Vector::new(size.width / 2.0, size.height / 2.0);
+        frame.translate(center);
+        frame.scale(self.scaling);
+        frame.translate(negative_translation);
+        frame.scale(Vector::new(BEAT_SIZE, -NOTE_SIZE));
+    }
+
+    pub fn draw_background(&self, bounds: Rectangle, grid_cache: &Cache) -> Geometry {
         let grid = grid_cache.draw(bounds.size(), |frame| {
-            let negative_translation = Vector::new(self.translation.x, -self.translation.y);
-            frame.translate(center);
-            frame.scale(self.scaling);
-            frame.translate(negative_translation);
-            frame.scale(Vector::new(BEAT_SIZE, -NOTE_SIZE));
+            self.adjust_frame(frame, &bounds.size());
 
             let region = self.visible_region(frame.size());
 
@@ -65,21 +107,17 @@ impl Grid {
 
             let text_size = 14.0;
 
-            let note_colors =
-                vec![true, false, true, false, true, true, false, true, false, true, false, true];
-
             let alpha = 0.25;
-            let full_midi_range = &self.scale.midi_range;
 
             for row in region.rows() {
-                let note_index = full_midi_range[row as usize];
+                let note_index = self.scale.midi_range[row as usize];
 
                 let pos = Point::new(*columns.start() as f32, row as f32);
                 frame.fill_rectangle(pos, Size::new(total_columns as f32, note_linewidth), color);
 
                 let mut note_color = Color::from_rgba8(100, 100, 100, alpha);
 
-                if !note_colors[note_index as usize % 12] {
+                if !IS_WHITE_KEY[note_index as usize % 12] {
                     note_color = Color::from_rgba8(10, 10, 10, alpha);
                 };
 

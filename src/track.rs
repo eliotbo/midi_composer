@@ -15,6 +15,7 @@ use crate::midi_notes::{
     Selected,
 };
 use crate::piano_theme::PianoTheme;
+use crate::scale::ScaleType;
 
 use crate::config::{MAX_SCALING, MIN_SCALING};
 
@@ -63,21 +64,16 @@ impl Default for Track {
         Self {
             grid_cache: Cache::default(),
             notes_cache: Cache::default(),
-            // moving_notes_cache: Cache::default(),
-            // resizing_notes_cache: Cache::default(),
             selection_square_cache: Cache::default(),
             selected_notes_cache: Cache::default(),
             selected: Selected::default(),
             midi_notes,
-            // moving_midi_notes: Vec::new(),
-            // resizing_midi_notes: Vec::new(),
             grid: Grid::default(),
             channel: 0,
             meta: TrackMeta::default(),
             timing_info: TimingInfo::default(),
             active: true,
             modifiers: keyboard::Modifiers::default(),
-            // snap_to_beat: true,
         }
     }
 }
@@ -89,6 +85,17 @@ impl Track {
 
     pub fn update(&mut self, message: TrackMessage) {
         match message {
+            TrackMessage::Toggle => {
+                println!("Toggled");
+                match self.grid.scale.scale_type {
+                    ScaleType::Chromatic => self.grid.scale.set_scale_type(ScaleType::Minor),
+                    ScaleType::Minor => self.grid.scale.set_scale_type(ScaleType::Chromatic),
+                    _ => {}
+                }
+                self.notes_cache.clear();
+                self.grid_cache.clear();
+                self.selected_notes_cache.clear();
+            }
             TrackMessage::ModifiersChanged(modifiers) => {
                 self.modifiers = modifiers;
             }
@@ -153,10 +160,11 @@ impl Track {
                         self.selected.notes.add_midi_notes(removed_notes);
                     }
                 };
-                println!();
-                println!("main: {:?}", self.midi_notes);
-                println!("selected: {:?}", self.selected.notes);
+                // println!();
+                // println!("main: {:?}", self.midi_notes);
+                // println!("selected: {:?}", self.selected.notes);
                 self.selected.selecting_square = None;
+                self.selected.direct_selecting_square = None;
                 self.selected_notes_cache.clear();
                 self.notes_cache.clear();
                 self.selection_square_cache.clear();
@@ -183,7 +191,6 @@ impl Track {
             //     // self.selected.notes.iter().for_each(|note| {
             //     //     self.midi_notes.add(note.clone());
             //     // });
-
             //     self.notes_cache.clear();
             //     self.selected_notes_cache.clear();
             // }
@@ -210,8 +217,9 @@ impl Track {
             //     self.notes_cache.clear();
             //     self.selected_notes_cache.clear();
             // }
-            TrackMessage::Selecting { selecting_square } => {
+            TrackMessage::Selecting { selecting_square, direct_selecting_square } => {
                 self.selected.selecting_square = Some(selecting_square);
+                self.selected.direct_selecting_square = Some(direct_selecting_square);
                 self.selection_square_cache.clear();
             } //
         }
@@ -229,12 +237,13 @@ pub enum TrackMessage {
     // FinishDragging,
     ResizedNotes { delta_time: f32, original_notes: MidiNotes, resize_end: NoteEdge },
     // FinishResizingNote,
-    Selecting { selecting_square: Rectangle },
+    Selecting { selecting_square: Rectangle, direct_selecting_square: Rectangle },
     // FinishSelecting {
     //     selecting_square: Rectangle,
     //     // keep_already_selected: bool,
     // },
     ModifiersChanged(Modifiers),
+    Toggle,
 }
 
 #[derive(Default)]
@@ -295,7 +304,10 @@ impl canvas::Program<TrackMessage, PianoTheme> for Track {
             }
         }
 
+        // let region = self.grid.visible_region(bounds.size());
+        // TODO: uncomment
         let projected_cursor = self.grid.to_track_axes(cursor_position, &bounds.size());
+        let music_scale_cursor = self.grid.adjust_to_music_scale(projected_cursor);
 
         match event {
             Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) => {
@@ -325,11 +337,11 @@ impl canvas::Program<TrackMessage, PianoTheme> for Track {
                 //
                 match track_state.note_interaction {
                     //
-                    NoteInteraction::Selecting { initial_cursor_pos } => {
-                        let delta_cursor_pos = projected_cursor - initial_cursor_pos;
+                    NoteInteraction::Selecting { initial_music_cursor, initial_cursor_proj } => {
+                        let delta_cursor_pos = music_scale_cursor - initial_music_cursor;
                         let size = Size::new(delta_cursor_pos.x, delta_cursor_pos.y);
 
-                        let selecting_square = Rectangle::new(initial_cursor_pos, size);
+                        let selecting_square = Rectangle::new(initial_music_cursor, size);
                         track_state.note_interaction = NoteInteraction::None;
 
                         let note_indices = self.midi_notes.get_notes_in_rect(selecting_square);
@@ -370,19 +382,19 @@ impl canvas::Program<TrackMessage, PianoTheme> for Track {
 
                 // Check if a Selected note has been clicked
                 if let Some(OverNote { note_index: _, note_edge }) =
-                    self.selected.notes.get_note_under_cursor(&self.grid, projected_cursor)
+                    self.selected.notes.get_note_under_cursor(&self.grid, music_scale_cursor)
                 {
                     let new_selection = self.selected.notes.clone();
                     let message = (event::Status::Captured, None);
 
-                    track_state.drag_or_resize(note_edge, projected_cursor, new_selection);
+                    track_state.drag_or_resize(note_edge, music_scale_cursor, new_selection);
 
                     return message;
                 }
 
                 // Check if a non-Selected note has been clicked
                 if let Some(OverNote { note_index, note_edge }) =
-                    self.midi_notes.get_note_under_cursor(&self.grid, projected_cursor)
+                    self.midi_notes.get_note_under_cursor(&self.grid, music_scale_cursor)
                 {
                     let mut new_selected = self.selected.notes.clone();
                     let note = self.midi_notes.get(note_index);
@@ -416,14 +428,16 @@ impl canvas::Program<TrackMessage, PianoTheme> for Track {
                         )
                     };
 
-                    track_state.drag_or_resize(note_edge, projected_cursor, new_selected);
+                    track_state.drag_or_resize(note_edge, music_scale_cursor, new_selected);
 
                     return message;
                 }
 
                 // if no note has been clicked, start selecting
-                track_state.note_interaction =
-                    NoteInteraction::Selecting { initial_cursor_pos: projected_cursor };
+                track_state.note_interaction = NoteInteraction::Selecting {
+                    initial_music_cursor: music_scale_cursor,
+                    initial_cursor_proj: projected_cursor,
+                };
 
                 // if the control key is not pressed, clear the Selected notes
                 if !self.modifiers.control() {
@@ -467,7 +481,7 @@ impl canvas::Program<TrackMessage, PianoTheme> for Track {
                     resize_end,
                 } = &track_state.note_interaction
                 {
-                    let cursor_delta = projected_cursor - *initial_cursor_pos;
+                    let cursor_delta = music_scale_cursor - *initial_cursor_pos;
 
                     message = Some(TrackMessage::ResizedNotes {
                         delta_time: cursor_delta.x,
@@ -480,17 +494,24 @@ impl canvas::Program<TrackMessage, PianoTheme> for Track {
                 }
 
                 // Selecting
-                if let NoteInteraction::Selecting { initial_cursor_pos } =
+                if let NoteInteraction::Selecting { initial_music_cursor, initial_cursor_proj } =
                     &track_state.note_interaction
                 {
-                    let cursor_delta = projected_cursor - *initial_cursor_pos;
+                    let cursor_delta = music_scale_cursor - *initial_music_cursor;
 
                     let selecting_square = Rectangle::new(
-                        *initial_cursor_pos,
+                        *initial_music_cursor,
                         Size::new(cursor_delta.x, cursor_delta.y),
                     );
 
-                    message = Some(TrackMessage::Selecting { selecting_square });
+                    let direct_cursor_delta = projected_cursor - *initial_cursor_proj;
+                    let direct_selecting_square = Rectangle::new(
+                        *initial_cursor_proj,
+                        Size::new(direct_cursor_delta.x, direct_cursor_delta.y),
+                    );
+
+                    message =
+                        Some(TrackMessage::Selecting { selecting_square, direct_selecting_square });
                     event_status = event::Status::Captured;
 
                     return (event_status, message);
@@ -504,11 +525,12 @@ impl canvas::Program<TrackMessage, PianoTheme> for Track {
                 {
                     // snap to pitch
                     let mut floor_cursor =
-                        Vector::new(projected_cursor.x, projected_cursor.y.floor());
+                        Vector::new(music_scale_cursor.x, music_scale_cursor.y.floor());
                     let mut floor_initial_cursor =
                         Vector::new(initial_cursor_pos.x, initial_cursor_pos.y.floor());
 
-                    let mut cursor_delta: Vector = (projected_cursor - *initial_cursor_pos).into();
+                    let mut cursor_delta: Vector =
+                        (music_scale_cursor - *initial_cursor_pos).into();
 
                     // snap to beat
                     if !self.modifiers.alt() {
@@ -552,11 +574,11 @@ impl canvas::Program<TrackMessage, PianoTheme> for Track {
                 // no mouse interaction yet
                 {
                     let mut over_note =
-                        self.selected.notes.get_note_under_cursor(&self.grid, projected_cursor);
+                        self.selected.notes.get_note_under_cursor(&self.grid, music_scale_cursor);
 
                     if let None = over_note {
                         over_note =
-                            self.midi_notes.get_note_under_cursor(&self.grid, projected_cursor);
+                            self.midi_notes.get_note_under_cursor(&self.grid, music_scale_cursor);
                     }
 
                     // check if the mouse is over a note or the edge of a note

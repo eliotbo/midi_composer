@@ -81,6 +81,10 @@ impl MidiNotes {
         self.notes[note_index.pitch_index][note_index.time_index].clone()
     }
 
+    // pub fn get_with_scale(&self, note_index: NoteIndex, scale: Scale) -> MidiNote {
+    //     self.notes[note_index.pitch_index][note_index.time_index].clone()
+    // }
+
     // drain the notes from self into a recipient
     pub fn drain(&mut self, recipient: &mut MidiNotes) {
         // let drained: MidiNotes = MidiNotes { notes: self.notes.drain(..).collect() };
@@ -279,10 +283,121 @@ impl MidiNotes {
         notes
     }
 
+    // TODO: optimize this. Maybe get rid of it in favor of specific drag_all and resize_all functions
     pub fn modify_all_notes(&mut self, f: impl Fn(&mut MidiNote) -> ()) {
+        // more efficient with for loop with a continue on empty vecs
+        let mut note_with_minimum_start = self
+            .notes
+            .iter()
+            .flatten()
+            .min_by(|a, b| a.start.partial_cmp(&b.start).unwrap())
+            .unwrap()
+            .clone();
+
+        // more efficient to reverse and break in a for loop
+        let mut note_with_minimum_pitch = self
+            .notes
+            .iter()
+            .flatten()
+            .min_by(|a, b| a.pitch.get().partial_cmp(&b.pitch.get()).unwrap())
+            .unwrap()
+            .clone();
+
+        // more efficient to break in a for loop
+        let mut note_with_maximum_pitch = self
+            .notes
+            .iter()
+            .flatten()
+            .max_by(|a, b| a.pitch.get().partial_cmp(&b.pitch.get()).unwrap())
+            .unwrap()
+            .clone();
+
+        let backup_min_start_note = note_with_minimum_start.clone();
+        let backup_min_pitch_note = note_with_minimum_pitch.clone();
+        let backup_max_pitch_note = note_with_maximum_pitch.clone();
+
+        f(&mut note_with_minimum_start);
+        f(&mut note_with_minimum_pitch);
+        f(&mut note_with_maximum_pitch);
+
+        //
+        //
+        // time
+        let delta_len = (note_with_minimum_start.end - note_with_minimum_start.start)
+            - (backup_min_start_note.end - backup_min_start_note.start);
+        let delta_time = note_with_minimum_start.start - backup_min_start_note.start;
+
+        let mut new_delta_time = 0.0;
+        let mut overide_delta_time = false;
+
+        // if the minimum start is moved below 1.0 (the start beat of the grid),
+        // then block it there
+        if note_with_minimum_start.start < 1.0 {
+            overide_delta_time = true;
+            new_delta_time = 1.0 - backup_min_start_note.start;
+        }
+
+        //
+        //
+        // min pitch
+        let delta_pitch_min =
+            note_with_minimum_pitch.pitch.0 - backup_min_pitch_note.pitch.get() as i16;
+
+        let mut new_delta_pitch_min = 0;
+        let mut overide_delta_pitch_min = false;
+
+        // if the minimum pitch is moved below 0 (the lowest pitch of the grid),
+        // then block it there
+        if note_with_minimum_pitch.pitch.0 < 0 {
+            overide_delta_pitch_min = true;
+            new_delta_pitch_min = 0 - backup_min_pitch_note.pitch.get() as i16;
+        }
+
+        //
+        //
+        // max pitch
+        let delta_pitch_max =
+            note_with_maximum_pitch.pitch.0 - backup_max_pitch_note.pitch.get() as i16;
+
+        let mut new_delta_pitch_max = 0;
+        let mut overide_delta_pitch_max = false;
+
+        // if the maximum pitch is moved above 127 (the highest pitch of the grid),
+        // then block it there
+        if note_with_maximum_pitch.pitch.0 > 127 {
+            overide_delta_pitch_max = true;
+            new_delta_pitch_max = 127 - backup_max_pitch_note.pitch.get() as i16;
+        }
+
         for notes_in_pitch in self.notes.iter_mut() {
             for note in notes_in_pitch.iter_mut() {
+                // apply transformation to all notes
                 f(note);
+
+                // revert transformation if it would move the minimum start below 1.0
+                if overide_delta_time {
+                    // for both dragging and resizing
+                    note.start += new_delta_time - delta_time;
+
+                    // only for case of dragging the whole notes to the left
+                    if delta_len.abs() < 0.0000001 {
+                        note.end += new_delta_time - delta_time;
+                    }
+                }
+
+                // revert transformation if it would move the minimum pitch below 0
+                if overide_delta_pitch_min {
+                    let new_pitch = note.pitch.0 - delta_pitch_min + new_delta_pitch_min;
+
+                    note.pitch = Pitch(new_pitch as i16);
+                }
+
+                // revert transformation if it would move the maximum pitch above 127
+                if overide_delta_pitch_max {
+                    let new_pitch = note.pitch.0 - delta_pitch_max + new_delta_pitch_max;
+
+                    note.pitch = Pitch(new_pitch as i16);
+                }
             }
         }
     }
@@ -549,15 +664,19 @@ pub enum ChangeSelection {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct Pitch(pub u8);
+pub struct Pitch(pub i16);
 
 impl Pitch {
     pub fn new(pitch: u8) -> Self {
-        Self(pitch)
+        Self(pitch as i16)
     }
 
     pub fn get(&self) -> u8 {
-        self.0
+        self.0 as u8
+    }
+
+    pub fn set(&mut self, pitch: u8) {
+        self.0 = pitch as i16;
     }
 
     // pub fn from_midi(midi: u8) -> Self {
@@ -615,7 +734,7 @@ impl Pitch {
         // add the octave number to the midi number
         let midi_number = midi_number + (octave_number.parse::<i8>().unwrap() + 2) as u8 * 12;
 
-        Pitch(midi_number)
+        Pitch(midi_number as i16)
     }
 }
 

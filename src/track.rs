@@ -172,14 +172,34 @@ impl Track {
 
             // TrackMessage::Dragged { delta_pitch, delta_time, mut original_notes } => {
             TrackMessage::Dragged { cursor_delta, mut original_notes } => {
+                // println!("");
                 original_notes.modify_all_notes(|mut note| {
-                    let delta_pitch = cursor_delta.y as i8;
+                    let chromatic_starting_pitch = note.pitch.get();
+
+                    let scale_starting_pitch = self
+                        .grid
+                        .scale
+                        .from_chromatic_index_to_scale_index(chromatic_starting_pitch)
+                        as i8;
+
+                    let mut new_pitch_index =
+                        (scale_starting_pitch + cursor_delta.y as i8) as usize;
+
+                    // if the new_pitch_index is out of bounds, cancel the move
+                    if new_pitch_index >= self.grid.scale.midi_size() {
+                        new_pitch_index = scale_starting_pitch as usize;
+                    }
+
+                    let new_pitch = self.grid.scale.midi_range[new_pitch_index] as i16;
+
                     let delta_time = cursor_delta.x;
-                    let new_pitch = note.pitch.get() as i8 + delta_pitch;
-                    note.pitch = Pitch(new_pitch as u8);
+                    note.pitch = Pitch(new_pitch);
+
                     note.start = note.start + delta_time;
                     note.end = note.end + delta_time;
                 });
+
+                // println!("original_notes: {:?}", original_notes);
 
                 self.selected.notes.clear();
                 self.selected.notes.add_midi_notes(original_notes);
@@ -187,13 +207,6 @@ impl Track {
                 self.notes_cache.clear();
             }
 
-            // TrackMessage::FinishDragging => {
-            //     // self.selected.notes.iter().for_each(|note| {
-            //     //     self.midi_notes.add(note.clone());
-            //     // });
-            //     self.notes_cache.clear();
-            //     self.selected_notes_cache.clear();
-            // }
             TrackMessage::ResizedNotes { delta_time, mut original_notes, resize_end } => {
                 original_notes.modify_all_notes(|note| {
                     let mut new_end_time = note.end;
@@ -387,7 +400,7 @@ impl canvas::Program<TrackMessage, PianoTheme> for Track {
                     let new_selection = self.selected.notes.clone();
                     let message = (event::Status::Captured, None);
 
-                    track_state.drag_or_resize(note_edge, music_scale_cursor, new_selection);
+                    track_state.drag_or_resize(note_edge, projected_cursor, new_selection);
 
                     return message;
                 }
@@ -428,7 +441,7 @@ impl canvas::Program<TrackMessage, PianoTheme> for Track {
                         )
                     };
 
-                    track_state.drag_or_resize(note_edge, music_scale_cursor, new_selected);
+                    track_state.drag_or_resize(note_edge, projected_cursor, new_selected);
 
                     return message;
                 }
@@ -524,23 +537,39 @@ impl canvas::Program<TrackMessage, PianoTheme> for Track {
                     &track_state.note_interaction
                 {
                     // snap to pitch
+                    // let mut music_floor_cursor =
+                    //     Vector::new(music_scale_cursor.x, music_scale_cursor.y.floor());
+                    // let mut music_floor_initial_cursor =
+                    //     Vector::new(initial_cursor_pos.x, initial_cursor_pos.y.floor());
+
+                    // let mut music_cursor_delta: Vector =
+                    //     (music_scale_cursor - *initial_cursor_pos).into();
+
+                    // always snap to pitch
                     let mut floor_cursor =
-                        Vector::new(music_scale_cursor.x, music_scale_cursor.y.floor());
+                        Vector::new(projected_cursor.x, projected_cursor.y.floor());
                     let mut floor_initial_cursor =
                         Vector::new(initial_cursor_pos.x, initial_cursor_pos.y.floor());
 
-                    let mut cursor_delta: Vector =
-                        (music_scale_cursor - *initial_cursor_pos).into();
+                    // println!("initial_cursor_pos: {:?}", initial_cursor_pos);
+                    // println!("projected_cursor: {:?}", projected_cursor);
+
+                    let mut cursor_delta: Vector = (projected_cursor - *initial_cursor_pos).into();
 
                     // snap to beat
                     if !self.modifiers.alt() {
+                        // music_floor_cursor.x = music_floor_cursor.x.floor();
+                        // music_floor_initial_cursor.x = music_floor_initial_cursor.x.floor();
+                        // music_cursor_delta =
+                        //     (music_floor_cursor - music_floor_initial_cursor).into();
+
                         floor_cursor.x = floor_cursor.x.floor();
                         floor_initial_cursor.x = floor_initial_cursor.x.floor();
                         cursor_delta = (floor_cursor - floor_initial_cursor).into();
                     }
 
                     message = Some(TrackMessage::Dragged {
-                        cursor_delta,
+                        cursor_delta: cursor_delta,
                         original_notes: original_notes.clone(),
                     });
 

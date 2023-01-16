@@ -48,8 +48,39 @@ impl Scale {
         Scale { scale_type, root, midi_range }
     }
 
+    pub fn from_chromatic_index_to_scale_index(&self, index: u8) -> u8 {
+        let octave = index / 12;
+        let note = index % 12;
+        // println!("index: {}, octave: {}, note: {}", index, octave, note);
+        // println!("octave: {}, note: {}", octave, note);
+        // get index of note in scale
+        let base_scale_index =
+            Self::get_base_notes(&self.scale_type, self.root).iter().position(|&x| x == note);
+
+        if let Some(i) = base_scale_index {
+            i as u8 + octave * self.size() as u8
+        } else {
+            panic!("note not in scale");
+        }
+    }
+
+    // pub fn find_index(&self, note: u8) -> Option<u8> {
+    //     self.midi_range.iter().position(|&x| x == note).map(|x| x as u8)
+    // }
+
+    pub fn get_root_base_notes(&self) -> Vec<u8> {
+        match &self.scale_type {
+            ScaleType::Major => vec![0, 2, 4, 5, 7, 9, 11],
+            ScaleType::Minor => vec![0, 2, 3, 5, 7, 8, 10],
+            ScaleType::Pentatonic => vec![0, 2, 4, 7, 9],
+            ScaleType::Blues => vec![0, 3, 5, 6, 7, 10],
+            ScaleType::Chromatic => vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+            ScaleType::Custom(scale) => scale.clone(),
+        }
+    }
+
     pub fn get_base_notes(scale_type: &ScaleType, root: u8) -> Vec<u8> {
-        match scale_type {
+        let mut notes = match scale_type {
             ScaleType::Major => vec![0, 2, 4, 5, 7, 9, 11],
             ScaleType::Minor => vec![0, 2, 3, 5, 7, 8, 10],
             ScaleType::Pentatonic => vec![0, 2, 4, 7, 9],
@@ -59,7 +90,10 @@ impl Scale {
         }
         .iter()
         .map(|&x| (x + root) % 12)
-        .collect()
+        .collect::<Vec<u8>>();
+
+        notes.sort();
+        notes
     }
 
     pub fn set_scale_type(&mut self, scale_type: ScaleType) {

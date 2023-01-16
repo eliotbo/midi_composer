@@ -264,8 +264,8 @@ impl Grid {
         //
         let lower_pitch_bound = -bounds.height / 2.0 / scaling.y - NOTE_SIZE * 0.0;
 
-        let higher_pitch_bound =
-            bounds.height / 2.0 / scaling.y - NOTE_SIZE * self.scale.midi_range.len() as f32;
+        let higher_pitch_bound = bounds.height / 2.0 / scaling.y
+            - NOTE_SIZE * (self.scale.midi_range.len() as f32 - 1.0);
 
         if new_translation.y < higher_pitch_bound {
             new_translation.y = higher_pitch_bound;

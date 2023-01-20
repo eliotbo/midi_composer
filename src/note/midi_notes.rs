@@ -3,13 +3,15 @@
 use crate::grid::Grid;
 use crate::track::TimingInfo;
 
+use iced::widget::canvas::event::{self, Event};
 use iced::widget::canvas::{Cache, Cursor, Geometry, Path, Stroke};
 use iced::{Color, Point, Rectangle, Size, Vector};
 
 use std::fmt;
 
+use super::scale::Scale;
 use crate::config::{BEAT_SIZE, NOTE_LABELS, NOTE_SIZE, RESIZE_BOX_PIXEL_WIDTH};
-use crate::scale::Scale;
+use crate::track::TrackMessage;
 
 #[derive(Clone, Default)]
 pub struct MidiNotes {
@@ -86,11 +88,23 @@ impl MidiNotes {
     // }
 
     // drain the notes from self into a recipient
-    pub fn drain(&mut self, recipient: &mut MidiNotes) {
+    pub fn drain(&mut self, recipient: &mut MidiNotes) -> Vec<NoteIndex> {
         // let drained: MidiNotes = MidiNotes { notes: self.notes.drain(..).collect() };
+        // let all_note_indices = self.get_all_note_indices();
         let drained: MidiNotes = std::mem::replace(self, Self::new());
-        recipient.add_midi_notes(drained);
+        recipient.add_midi_notes(drained)
+        // all_note_indices
         // _ = std::mem::replace(self, Self::new());
+    }
+
+    pub fn get_all_note_indices(&self) -> Vec<NoteIndex> {
+        let mut note_indices = Vec::new();
+        for (pitch_index, notes) in self.notes.iter().enumerate() {
+            for (time_index, _) in notes.iter().enumerate() {
+                note_indices.push(NoteIndex { pitch_index, time_index });
+            }
+        }
+        note_indices
     }
 
     pub fn add_notes_vec(&mut self, notes: Vec<MidiNote>) {
@@ -99,12 +113,15 @@ impl MidiNotes {
         }
     }
 
-    pub fn add_midi_notes(&mut self, midi_notes: MidiNotes) {
+    pub fn add_midi_notes(&mut self, midi_notes: MidiNotes) -> Vec<NoteIndex> {
+        let mut note_indices = Vec::new();
         for notes in midi_notes.notes {
             for note in notes {
-                self.add(note);
+                let note_index = self.add(note);
+                note_indices.push(note_index);
             }
         }
+        note_indices
     }
 
     pub fn sort(&mut self) {
@@ -217,7 +234,6 @@ impl MidiNotes {
 
             for row in region.rows() {
 
-
                 // let pitch_relative_to_grid = row as usize;
                 let pitch_relative_to_grid =  grid.scale.midi_range[row as usize] as usize;
 
@@ -227,7 +243,6 @@ impl MidiNotes {
                     continue;
                 }
 
-                // println!("\n\nrow  : {}, \npitch: {}", row, pitch_relative_to_grid);
 
                 for note in maybe_note_vec.unwrap().iter() {
                     //
@@ -239,7 +254,6 @@ impl MidiNotes {
                     let pos2 = Point::new(note.start as f32, pitch_relative_to_grid as f32);
                     let note_rect = Rectangle::new(pos2, Size::new(note_len as f32, 1.0));
 
-                    // println!("projected_cursor: {:?}", maybe_projected_cursor);
 
                     if let Some(projected_cursor) = maybe_projected_cursor {
 
@@ -402,6 +416,126 @@ impl MidiNotes {
         }
     }
 
+    pub fn drag_all_notes(&mut self, delta_cursor: Vector, grid: &Grid) {
+        // Maybe we should keep track of the minimum start time somewhere to avoid this big O(n) search
+        let note_with_minimum_start = self
+            .notes
+            .iter()
+            .flatten()
+            .min_by(|a, b| a.start.partial_cmp(&b.start).unwrap())
+            .unwrap()
+            .clone();
+
+        // find the minimum pitch by finding the first non-empty vector
+        let mut note_with_minimum_pitch =
+            self.notes.iter().find(|v| !v.is_empty()).unwrap().first().unwrap().clone();
+
+        // find the minimum pitch by finding the first non-empty vector from the top
+        let mut note_with_maximum_pitch =
+            self.notes.iter().rev().find(|v| !v.is_empty()).unwrap().first().unwrap().clone();
+
+        let new_start = note_with_minimum_start.get_new_start(delta_cursor);
+
+        // get the pitch index relative to the current music scale
+        let min_scaled_pitch = note_with_minimum_pitch.get_scaled_pitch(grid);
+        let max_scaled_pitch = note_with_maximum_pitch.get_scaled_pitch(grid);
+
+        // the grid is scaled such that a unit in the x direction is equal to a beat
+        // and a unit in the y direction is equal to a pitch
+        let mut delta_pitch = delta_cursor.y as i8;
+        let mut delta_time = delta_cursor.x;
+
+        // time
+        //
+        // if the minimum start is moved below 1.0 (the start beat of the grid),
+        // then block it there
+        if new_start < 1.0 {
+            delta_time = 1.0 - note_with_minimum_start.start;
+        }
+
+        // min pitch
+        //
+        // if the minimum pitch is moved below 0 (the lowest pitch of the grid),
+        // then block it there
+        //
+        let new_min_pitch = min_scaled_pitch as i16 + delta_cursor.y.floor() as i16;
+        if new_min_pitch < 0 {
+            delta_pitch = 0 - min_scaled_pitch;
+        }
+
+        //
+        //
+        // // max pitch
+        // if the maximum pitch is moved above grid.scale.midi_size() (the highest pitch of the grid),
+        // then block it there.
+        // Note sure why we need to subtract 2 here, but it works.
+        let new_max_pitch = max_scaled_pitch as i16 + delta_pitch as i16;
+        if new_max_pitch > grid.scale.midi_size() as i16 - 2 {
+            delta_pitch = (grid.scale.midi_size() as i16 - (max_scaled_pitch as i16)) as i8 - 2;
+        }
+
+        for notes_in_pitch in self.notes.iter_mut() {
+            for note in notes_in_pitch.iter_mut() {
+                //
+                // apply transformation to all notes
+                note.reposition(delta_pitch, delta_time, grid);
+            }
+        }
+    }
+
+    // TODO: optimize this.
+    pub fn resize_all_notes(&mut self, resize_end: NoteEdge, mut delta_time: f32) {
+        // more efficient with for loop with a continue on empty vecs
+        let mut note_with_minimum_start = self
+            .notes
+            .iter()
+            .flatten()
+            .min_by(|a, b| a.start.partial_cmp(&b.start).unwrap())
+            .unwrap()
+            .clone();
+
+        let backup_min_start_note = note_with_minimum_start.clone();
+
+        note_with_minimum_start.resize(resize_end, delta_time);
+
+        let delta_len = (note_with_minimum_start.end - note_with_minimum_start.start)
+            - (backup_min_start_note.end - backup_min_start_note.start);
+
+        if let NoteEdge::Start = resize_end {
+            delta_time = note_with_minimum_start.start - backup_min_start_note.start;
+        } else {
+            delta_time = note_with_minimum_start.end - backup_min_start_note.end;
+        }
+
+        let mut new_delta_time = 0.0;
+        let mut overide_delta_time = false;
+
+        // if the minimum start is moved below 1.0 (the start beat of the grid),
+        // then block it there
+        if note_with_minimum_start.start < 1.0 {
+            overide_delta_time = true;
+            new_delta_time = 1.0 - backup_min_start_note.start;
+        }
+
+        for notes_in_pitch in self.notes.iter_mut() {
+            for note in notes_in_pitch.iter_mut() {
+                // apply transformation to all notes
+                note.resize(resize_end, delta_time);
+
+                // revert transformation if it would move the minimum start below 1.0
+                if overide_delta_time {
+                    // for both dragging and resizing
+                    note.start += new_delta_time - delta_time;
+
+                    // only for case of dragging the whole notes to the left
+                    if delta_len.abs() < 0.0000001 {
+                        note.end += new_delta_time - delta_time;
+                    }
+                }
+            }
+        }
+    }
+
     // TODO: optimize using only the notes that can be currently viewed
     pub fn get_note_under_cursor(&self, grid: &Grid, projected_cursor: Point) -> Option<OverNote> {
         let mut resize_end = NoteEdge::None;
@@ -486,11 +620,6 @@ impl MidiNotes {
             })
             .collect();
 
-        // println!();
-        // println!("rect: {:?}", rect);
-        // println!("potential_pitch_vec: {:?}", potential_pitch_vec);
-        // println!("notes_filtered_by_pitch: {:?}", notes_filtered_by_pitch);
-
         note_indices
     }
 
@@ -501,7 +630,7 @@ impl MidiNotes {
         note_indices.sort_by(|a, b| b.time_index.cmp(&a.time_index));
         // note_indices.reverse();
         let mut removed_notes: MidiNotes = MidiNotes::new();
-        for NoteIndex { pitch_index, time_index } in note_indices {
+        for NoteIndex { pitch_index, time_index } in note_indices.clone() {
             // println!("removing note at pitch_index: {}, time_index: {}", pitch_index, time_index);
 
             let note = self.notes[pitch_index].remove(time_index);
@@ -598,6 +727,83 @@ impl MidiNote {
         false
     }
 
+    pub fn get_pitch(&self) -> u8 {
+        self.pitch.get()
+    }
+
+    pub fn get_scaled_pitch(&mut self, grid: &Grid) -> i8 {
+        let chromatic_starting_pitch = self.pitch.get();
+
+        let scale_starting_pitch =
+            grid.scale.from_chromatic_index_to_scale_index(chromatic_starting_pitch) as i8;
+
+        scale_starting_pitch
+
+        // scale_starting_pitch as i16 + cursor_delta.y as i16
+    }
+
+    pub fn get_new_start(&self, cursor_delta: Vector) -> f32 {
+        self.start + cursor_delta.x
+    }
+
+    // pub fn reposition(&mut self, cursor_delta: Vector, grid: &Grid) {
+    pub fn reposition(&mut self, delta_pitch: i8, delta_time: f32, grid: &Grid) {
+        let chromatic_starting_pitch = self.pitch.get();
+
+        let scale_starting_pitch =
+            grid.scale.from_chromatic_index_to_scale_index(chromatic_starting_pitch) as i8;
+
+        let new_pitch_index = (scale_starting_pitch + delta_pitch) as usize;
+
+        // // if the new_pitch_index is out of bounds, cancel the move
+        // if new_pitch_index >= grid.scale.midi_size() {
+        //     new_pitch_index = scale_starting_pitch as usize;
+        // }
+
+        // println!("new_pitch_index: {}", new_pitch_index);
+
+        let new_pitch = grid.scale.midi_range[new_pitch_index] as i16;
+
+        // let delta_time = cursor_delta.x;
+        self.pitch = Pitch(new_pitch);
+
+        self.start = self.start + delta_time;
+        self.end = self.end + delta_time;
+    }
+
+    pub fn resize(&mut self, resize_end: NoteEdge, delta_time: f32) {
+        let mut new_end_time = self.end;
+        let mut new_start_time = self.start;
+        match resize_end {
+            NoteEdge::Start => {
+                new_start_time = self.start + delta_time;
+
+                // // cannot start later than end
+                // if new_start_time > new_end_time {
+                //     new_start_time = new_end_time;
+                // }
+
+                // // cannot start before beat 1
+                // if new_start_time < 1.0 {
+                //     new_start_time = 1.0;
+                // }
+            }
+            NoteEdge::End => {
+                new_end_time = self.end + delta_time;
+
+                // cannot end before start
+                if new_end_time < new_start_time {
+                    new_end_time = new_start_time;
+                }
+            }
+            _ => {}
+        }
+
+        *self = MidiNote::new(new_start_time, new_end_time, self.pitch);
+
+        // println!("original_notes: {:?}", original_note
+    }
+
     pub fn to_label(&self) -> String {
         format!("pitch label: {}", self.pitch.to_str())
     }
@@ -610,6 +816,7 @@ pub struct Selected {
     // the direct_selecting_square is not adjusted to the music scale,
     // thus making it useful only for drawing.
     pub direct_selecting_square: Option<Rectangle>,
+    // pub original_note_indices: Vec<NoteIndex>,
 }
 
 impl Selected {
@@ -747,11 +954,147 @@ pub enum NoteInteraction {
     Resizing { initial_cursor_pos: Point, original_notes: MidiNotes, resize_end: NoteEdge },
     ResizingHover,
     Selecting { initial_music_cursor: Point, initial_cursor_proj: Point },
+    WriteNoteMode(bool), // adding notes if mouse is pressed
 }
 
 impl Default for NoteInteraction {
     fn default() -> Self {
         Self::None
+    }
+}
+
+impl NoteInteraction {
+    pub fn toggle_write_mode(&mut self) {
+        match self {
+            Self::WriteNoteMode(_) => *self = Self::None,
+            _ => *self = Self::WriteNoteMode(false),
+        }
+    }
+
+    pub fn is_write_mode(&self) -> bool {
+        match self {
+            Self::WriteNoteMode(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_writing(&self) -> bool {
+        match self {
+            Self::WriteNoteMode(true) => true,
+            _ => false,
+        }
+    }
+
+    pub fn handle_resizing(
+        &self,
+        music_scale_cursor: Point,
+    ) -> (event::Status, Option<crate::track::TrackMessage>) {
+        if let NoteInteraction::Resizing { initial_cursor_pos, original_notes, resize_end } = self {
+            let cursor_delta = music_scale_cursor - *initial_cursor_pos;
+
+            return (
+                event::Status::Captured,
+                Some(TrackMessage::ResizedNotes {
+                    delta_time: cursor_delta.x,
+                    original_notes: original_notes.clone(),
+                    resize_end: resize_end.clone(),
+                }),
+            );
+        } else {
+            return (event::Status::Ignored, None);
+        }
+    }
+
+    pub fn handle_selecting(
+        &self,
+        projected_cursor: Point,
+        music_scale_cursor: Point,
+    ) -> (event::Status, Option<crate::track::TrackMessage>) {
+        if let NoteInteraction::Selecting { initial_music_cursor, initial_cursor_proj } = self {
+            let cursor_delta = music_scale_cursor - *initial_music_cursor;
+
+            let selecting_square =
+                Rectangle::new(*initial_music_cursor, Size::new(cursor_delta.x, cursor_delta.y));
+
+            let direct_cursor_delta = projected_cursor - *initial_cursor_proj;
+            let direct_selecting_square = Rectangle::new(
+                *initial_cursor_proj,
+                Size::new(direct_cursor_delta.x, direct_cursor_delta.y),
+            );
+
+            return (
+                event::Status::Captured,
+                Some(TrackMessage::Selecting { selecting_square, direct_selecting_square }),
+            );
+        } else {
+            return (event::Status::Ignored, None);
+        }
+    }
+
+    pub fn handle_dragging(
+        &self,
+        projected_cursor: Point,
+        alt: bool,
+    ) -> (event::Status, Option<crate::track::TrackMessage>) {
+        if let NoteInteraction::Dragging { initial_cursor_pos, original_notes } = self {
+            let mut floor_cursor = Vector::new(projected_cursor.x, projected_cursor.y.floor());
+            let mut floor_initial_cursor =
+                Vector::new(initial_cursor_pos.x, initial_cursor_pos.y.floor());
+
+            let mut cursor_delta: Vector = (projected_cursor - *initial_cursor_pos).into();
+
+            // snap to beat
+            if alt {
+                // music_floor_cursor.x = music_floor_cursor.x.floor();
+                // music_floor_initial_cursor.x = music_floor_initial_cursor.x.floor();
+                // music_cursor_delta =
+                //     (music_floor_cursor - music_floor_initial_cursor).into();
+
+                floor_cursor.x = floor_cursor.x.floor();
+                floor_initial_cursor.x = floor_initial_cursor.x.floor();
+                cursor_delta = (floor_cursor - floor_initial_cursor).into();
+            }
+
+            return (
+                event::Status::Captured,
+                Some(TrackMessage::Dragged {
+                    cursor_delta: cursor_delta,
+                    original_notes: original_notes.clone(),
+                }),
+            );
+        } else {
+            return (event::Status::Ignored, None);
+        }
+    }
+
+    pub fn handle_note_writing(
+        &self,
+        music_scale_cursor: Point,
+        track: &crate::track::Track,
+    ) -> (event::Status, Option<crate::track::TrackMessage>) {
+        if self.is_writing() {
+            // if there is already a note under the cursor, ignore the mouse press
+            if let Some(OverNote { .. }) =
+                track.midi_notes.get_note_under_cursor(&track.grid, music_scale_cursor)
+            {
+                return (event::Status::Ignored, None);
+            }
+            if let Some(OverNote { .. }) =
+                track.selected.notes.get_note_under_cursor(&track.grid, music_scale_cursor)
+            {
+                return (event::Status::Ignored, None);
+            }
+
+            let pitch = Pitch(music_scale_cursor.y.floor() as i16);
+            let start = music_scale_cursor.x.floor();
+            let end = start + 1.0;
+
+            let note = MidiNote::new(start, end, pitch);
+
+            return (event::Status::Captured, Some(TrackMessage::AddNote(note)));
+        } else {
+            return (event::Status::Ignored, None);
+        }
     }
 }
 

@@ -1,6 +1,7 @@
 //! Midi track
 //!
 use iced::executor;
+use iced::keyboard;
 use iced::widget::{
     button,
     // column,
@@ -14,7 +15,9 @@ use iced::widget::{
 use iced::window;
 
 use iced::alignment;
-use iced::{Application, Command, Length, Settings};
+use iced::{Application, Command, Length, Settings, Subscription};
+use iced_native::{event, subscription, Event};
+
 pub use iced_native;
 
 pub mod piano_theme;
@@ -26,14 +29,19 @@ use track::{TimingInfo, Track, TrackMessage};
 pub mod grid;
 pub use grid::Grid;
 
-mod midi_notes;
+pub mod note;
+pub mod util;
+
+// mod midi_notes;
 // use midi_notes::MidiNote;
 
 mod config;
-mod scale;
+// mod scale;
 
 use crate::config::INIT_GRID_SIZE;
+use crate::util::{Action, History, TrackId};
 
+use std::collections::HashMap;
 // TODO: make my own Vector type that is compatible with element-wise operations
 //
 //
@@ -52,35 +60,71 @@ pub fn main() -> iced::Result {
 }
 
 struct MidiEditor {
-    _history: Vec<Action>,
-    tracks: Vec<Track>,
+    history: History,
+    tracks: HashMap<TrackId, Track>,
+    track_order: Vec<TrackId>,
     _timein_info: TimingInfo,
     _selection: Selected,
 }
 
 impl Default for MidiEditor {
     fn default() -> Self {
+        let tracks = vec![0, 1].iter().map(|id| (*id, Track::new(*id))).collect();
         Self {
-            _history: Vec::new(),
-            tracks: vec![Track::default(), Track::default()],
+            history: History::default(),
+            tracks, // vec![Track::new(0), Track::new(1)],
+            track_order: vec![0, 1],
             _timein_info: TimingInfo::default(),
             _selection: Selected { _track_number: 0, _note_number: 0 },
         }
     }
 }
 
-#[derive(Debug, Clone)]
-struct Action;
+// #[derive(Debug, Clone)]
+// struct Action;
 
 #[derive(Debug, Copy, Clone)]
 struct Selected {
-    _track_number: u16,
+    _track_number: TrackId,
     _note_number: u32,
 }
 
 #[derive(Debug, Clone)]
 enum EditorMessage {
-    Track(usize, TrackMessage),
+    Track(TrackId, TrackMessage),
+    EventOccurred(iced_native::Event),
+}
+
+impl MidiEditor {
+    fn handle_undo(&mut self) -> Command<EditorMessage> {
+        if let Some(action) = self.history.undo() {
+            match action {
+                Action::TrackAction(track_id, track_action) => {
+                    Command::perform(async move { track_action }, move |act| {
+                        EditorMessage::Track(track_id, TrackMessage::Undo(act))
+                    })
+                }
+                Action::None => Command::none(),
+            }
+        } else {
+            Command::none()
+        }
+    }
+
+    fn handle_redo(&mut self) -> Command<EditorMessage> {
+        if let Some(action) = self.history.redo() {
+            match action {
+                Action::TrackAction(track_id, track_action) => {
+                    Command::perform(async move { track_action }, move |act| {
+                        EditorMessage::Track(track_id, TrackMessage::Redo(act))
+                    })
+                }
+                Action::None => Command::none(),
+            }
+        } else {
+            Command::none()
+        }
+    }
 }
 
 type EditorElement<'a> = iced::Element<'a, EditorMessage, iced::Renderer<PianoTheme>>;
@@ -101,29 +145,43 @@ impl Application for MidiEditor {
 
     fn update(&mut self, message: EditorMessage) -> Command<EditorMessage> {
         match message {
-            EditorMessage::Track(track_number, message) => {
-                self.tracks[track_number].update(message);
+            EditorMessage::Track(track_id, message) => {
+                if let Some(track) = self.tracks.get_mut(&track_id) {
+                    track.update(message, &mut self.history);
+                } else {
+                    println!("Called non-existent track id: {}", track_id);
+                }
+                Command::none()
             }
-        }
+            EditorMessage::EventOccurred(event) => match event {
+                Event::Keyboard(keyboard::Event::KeyPressed { modifiers, key_code })
+                    if modifiers.command() && key_code == keyboard::KeyCode::Z =>
+                {
+                    self.handle_undo()
+                }
+                // redo
+                Event::Keyboard(keyboard::Event::KeyPressed { modifiers, key_code })
+                    if modifiers.command() && key_code == keyboard::KeyCode::Y =>
+                {
+                    self.handle_redo()
+                }
+                // Event::Keyboard(keyboard::Event::KeyPressed { modifiers, key_code })
+                //     if key_code == keyboard::KeyCode::B =>
+                // {
+                //     for mut track in self.tracks {
 
-        Command::none()
+                //     }
+                // }
+                _ => Command::none(),
+            },
+        }
+    }
+
+    fn subscription(&self) -> Subscription<EditorMessage> {
+        iced_native::subscription::events().map(EditorMessage::EventOccurred)
     }
 
     fn view(&self) -> EditorElement {
-        //         let track: &Track = &self.tracks[0];
-        // let canvas: track::TrackElement = track.view();
-        // let editor_canvas: EditorElement = canvas.map(move |message| EditorMessage::Track(message));
-
-        // let mut content = column![];
-
-        // for (track_num, track) in self.tracks.iter().enumerate() {
-        //     // let track: &Track = &self.tracks[0];
-        //     let canvas: track::TrackElement = (&track).view();
-        //     let editor_canvas: EditorElement =
-        //         canvas.map(move |message| EditorMessage::Track(message, track_num));
-        //     content.push(editor_canvas);
-        // }
-
         let button = |label| {
             button(text(label).horizontal_alignment(alignment::Horizontal::Center))
                 .padding(10)
@@ -134,13 +192,13 @@ impl Application for MidiEditor {
             button("Toggle").on_press(EditorMessage::Track(1, TrackMessage::Toggle));
 
         let mut elements: Vec<EditorElement> = self
-            .tracks
+            .track_order
             .iter()
-            .enumerate()
-            .map(|(track_number, track)| {
+            .map(|track_id| {
+                let track = &self.tracks[track_id];
                 let canvas: track::TrackElement = (&track).view();
                 let editor_canvas: EditorElement =
-                    canvas.map(move |message| EditorMessage::Track(track_number, message));
+                    canvas.map(move |message| EditorMessage::Track(*track_id, message));
                 editor_canvas
             })
             .collect();

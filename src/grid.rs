@@ -6,7 +6,7 @@ use std::ops::RangeInclusive;
 use crate::config::{
     BEAT_SIZE, INIT_GRID_SIZE, INIT_PITCH_POS, INIT_SCALING, NOTE_LABELS, NOTE_SIZE,
 };
-use crate::scale::Scale;
+use crate::note::scale::Scale;
 
 pub const IS_WHITE_KEY: [bool; 12] =
     [true, false, true, false, true, true, false, true, false, true, false, true];
@@ -80,6 +80,25 @@ impl Grid {
         point.y = self.scale.midi_range[y_whole as usize] as f32 + y_frac;
         point
     }
+
+    // // Takes in a point (ex: cursor position) and modifies it accodring to the music scale.
+    // // If the scale is chromatic, nothing changes, but if the scale is anything else, the
+    // // y value will skip over notes that are not in the scale.
+    // pub fn adjust_to_music_scale(&self, mut point: Point) -> Point {
+    //     let y_whole = point.y.floor();
+    //     let a = (y_whole as i16 / self.scale.midi_size() as i16) * self.scale.midi_size() as i16;
+    //     let mut b = y_whole as i16 % self.scale.midi_size() as i16;
+
+    //     let mut bs = 1.0;
+    //     if b < 0 {
+    //         b += self.scale.midi_size() as i16;
+    //         bs = -1.0;
+    //     }
+
+    //     let y_frac = point.y - y_whole;
+    //     point.y = a as f32 + self.scale.midi_range[b as usize] as f32 * bs + y_frac;
+    //     point
+    // }
 
     pub fn adjust_frame(&self, frame: &mut Frame, size: &Size) {
         let negative_translation = Vector::new(self.translation.x, -self.translation.y);

@@ -331,38 +331,32 @@ impl Track {
                     }
                 }
             }
-            TrackMessage::Redo(action) => {
-                // for action in action_group.actions {
-                //     if let Action::TrackAction(track_action) = action {
-                //         match track_action {
-                //             TrackAction::AddNote { note, .. } => {
-                //                 self.midi_notes.add(note);
-                //             }
-                //             TrackAction::AddManyNotes { notes, .. } => {
-                //                 self.midi_notes.add_midi_notes(notes);
-                //             }
-                //             TrackAction::RemoveNote { note_index_before, .. } => {
-                //                 self.midi_notes.remove(note_index_before);
-                //             }
-                //             TrackAction::RemoveManyNotes { note_indices_before, .. } => {
-                //                 self.midi_notes.remove_notes(note_indices_before);
-                //             }
-                //             TrackAction::ChangeNote { note_after, note_index_before, .. } => {
-                //                 self.midi_notes.remove(note_index_before);
-                //                 self.midi_notes.add(note_after);
-                //             }
-                //             TrackAction::ChangeManyNotes {
-                //                 notes_after,
-                //                 note_indices_before,
-                //                 ..
-                //             } => {
-                //                 self.midi_notes.remove_notes(note_indices_before);
-                //                 self.midi_notes.add_midi_notes(notes_after);
-                //             }
-                //         }
-                //     }
-                // }
-            }
+            TrackMessage::Redo(action) => match action {
+                TrackAction::AddNote { note_to_add, .. } => {
+                    self.midi_notes.add(note_to_add.clone());
+                }
+                TrackAction::AddManyNotes { notes_to_add, .. } => {
+                    self.midi_notes.add_midi_notes(notes_to_add.clone());
+                }
+                TrackAction::RemoveNote { note_index_before, .. } => {
+                    self.midi_notes.remove(note_index_before);
+                }
+                TrackAction::RemoveManyNotes { note_indices_before, .. } => {
+                    self.midi_notes.remove_notes(note_indices_before);
+                }
+                TrackAction::DraggedNotes { cursor_delta, .. } => {}
+                TrackAction::ResizedNotes { delta_time, resize_end } => {}
+                TrackAction::SelectionAction(selection_action) => match selection_action {
+                    SelectionAction::SelectNote { note_index, new_index } => {}
+                    SelectionAction::DeselectNote { note_index, new_index } => {}
+                    SelectionAction::SelectManyNotes { note_indices, new_indices } => {}
+                    SelectionAction::DeselectManyNotes { note_indices, new_indices } => {}
+                    SelectionAction::SelectAllNotes { new_indices } => {}
+                    SelectionAction::DeselectAllNotes { new_indices } => {}
+                    SelectionAction::DeselectAllButOne { note_index, new_indices } => {}
+                    SelectionAction::SelectOne { note_index, new_indices } => {}
+                },
+            },
         }
     }
 }

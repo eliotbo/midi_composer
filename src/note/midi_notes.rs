@@ -17,6 +17,8 @@ use crate::track::TrackMessage;
 pub struct MidiNotes {
     // organized by pitch and then by time
     pub notes: Vec<Vec<MidiNote>>,
+    pub start_time: f32, // TODO: keep track of start and end time when adding/deleting notes
+    pub end_time: f32,
 }
 
 fn is_sorted<I>(data: I) -> bool
@@ -72,7 +74,7 @@ impl MidiNotes {
         for _ in 0..128 {
             notes.push(Vec::new());
         }
-        Self { notes }
+        Self { notes, start_time: 1.0, end_time: 5.0 }
     }
 
     pub fn clear(&mut self) {

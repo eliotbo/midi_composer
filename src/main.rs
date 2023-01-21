@@ -63,6 +63,7 @@ struct MidiEditor {
     history: History,
     tracks: HashMap<TrackId, Track>,
     track_order: Vec<TrackId>,
+    debug_text: String,
     _timein_info: TimingInfo,
     _selection: Selected,
 }
@@ -74,6 +75,7 @@ impl Default for MidiEditor {
             history: History::default(),
             tracks, // vec![Track::new(0), Track::new(1)],
             track_order: vec![0, 1],
+            debug_text: "debug".to_string(),
             _timein_info: TimingInfo::default(),
             _selection: Selected { _track_number: 0, _note_number: 0 },
         }
@@ -93,6 +95,7 @@ struct Selected {
 enum EditorMessage {
     Track(TrackId, TrackMessage),
     EventOccurred(iced_native::Event),
+    ShowDebug(String),
 }
 
 impl MidiEditor {
@@ -101,6 +104,7 @@ impl MidiEditor {
             match action {
                 Action::TrackAction(track_id, track_action) => {
                     Command::perform(async move { track_action }, move |act| {
+                        // println!("Undoing action: {:?}", act);
                         EditorMessage::Track(track_id, TrackMessage::Undo(act))
                     })
                 }
@@ -154,17 +158,21 @@ impl Application for MidiEditor {
                 Command::none()
             }
             EditorMessage::EventOccurred(event) => match event {
+                // redo
+                Event::Keyboard(keyboard::Event::KeyPressed { modifiers, key_code })
+                    if modifiers.command()
+                        && modifiers.shift()
+                        && key_code == keyboard::KeyCode::Z =>
+                {
+                    println!("Redoing");
+                    self.handle_redo()
+                }
                 Event::Keyboard(keyboard::Event::KeyPressed { modifiers, key_code })
                     if modifiers.command() && key_code == keyboard::KeyCode::Z =>
                 {
                     self.handle_undo()
                 }
-                // redo
-                Event::Keyboard(keyboard::Event::KeyPressed { modifiers, key_code })
-                    if modifiers.command() && key_code == keyboard::KeyCode::Y =>
-                {
-                    self.handle_redo()
-                }
+
                 // Event::Keyboard(keyboard::Event::KeyPressed { modifiers, key_code })
                 //     if key_code == keyboard::KeyCode::B =>
                 // {
@@ -174,6 +182,11 @@ impl Application for MidiEditor {
                 // }
                 _ => Command::none(),
             },
+            EditorMessage::ShowDebug(msg) => {
+                println!("{}", msg);
+                println!("{:#?}", self.history);
+                Command::none()
+            }
         }
     }
 
@@ -191,6 +204,9 @@ impl Application for MidiEditor {
         let toggle_button =
             button("Toggle").on_press(EditorMessage::Track(1, TrackMessage::Toggle));
 
+        let debug_button =
+            button("Debug").on_press(EditorMessage::ShowDebug(self.debug_text.clone()));
+
         let mut elements: Vec<EditorElement> = self
             .track_order
             .iter()
@@ -204,6 +220,7 @@ impl Application for MidiEditor {
             .collect();
 
         elements.push(toggle_button.into());
+        elements.push(debug_button.into());
 
         let content = Column::with_children(elements).spacing(15);
 

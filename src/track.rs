@@ -14,13 +14,19 @@ use crate::note::midi_notes::{
     ChangeSelection, MidiNote, MidiNotes, NoteEdge, NoteIndex, NoteInteraction, OverNote, Pitch,
     Selected,
 };
-use crate::note::scale::ScaleType;
+use crate::note::scale::{Scale, ScaleType};
 use crate::piano_theme::PianoTheme;
 
 use crate::config::{MAX_SCALING, MIN_SCALING};
 use crate::util::{Action, History, SelectionAction, TrackAction, TrackId};
 
 pub type TrackElement<'a> = iced::Element<'a, TrackMessage, iced::Renderer<PianoTheme>>;
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Drag {
+    delta_pitch: i8,
+    delta_time: f32,
+}
 
 pub struct Track {
     track_id: TrackId,
@@ -36,6 +42,9 @@ pub struct Track {
     pub timing_info: TimingInfo,
     pub active: bool,
     pub modifiers: keyboard::Modifiers,
+    pub last_cursor_delta: Vector,
+    pub last_delta_time: f32,
+    pub drag: Drag,
 }
 
 #[derive(Debug, Clone)]
@@ -76,6 +85,9 @@ impl Track {
             timing_info: TimingInfo::default(),
             active: true,
             modifiers: keyboard::Modifiers::default(),
+            last_cursor_delta: Vector::default(),
+            last_delta_time: 0.0,
+            drag: Drag::default(),
         }
     }
 
@@ -132,9 +144,33 @@ impl Track {
 
                         history.add_selection(
                             self.track_id,
-                            SelectionAction::DeselectAllNotes { new_indices },
+                            SelectionAction::DrainSelect { new_indices },
                         );
                     }
+                    ChangeSelection::UnselectOne { note_index } => {
+                        let note = self.selected.notes.remove(note_index);
+                        let new_index = self.midi_notes.add(note);
+
+                        history.add_selection(
+                            self.track_id,
+                            SelectionAction::UnselectOne { note_index, new_index },
+                        );
+                    }
+                    ChangeSelection::UnselectAllButOne { note_index } => {
+                        let selected_note = self.selected.notes.remove(note_index);
+                        let new_indices = self.selected.notes.drain(&mut self.midi_notes);
+                        let new_note_index = self.selected.notes.add(selected_note);
+
+                        history.add_selection(
+                            self.track_id,
+                            SelectionAction::UnselectAllButOne {
+                                note_index,
+                                new_indices,
+                                new_note_index,
+                            },
+                        );
+                    }
+
                     ChangeSelection::SelectAll => {
                         let new_indices = self.midi_notes.drain(&mut self.selected.notes);
 
@@ -149,36 +185,18 @@ impl Track {
 
                         history.add_selection(
                             self.track_id,
-                            SelectionAction::SelectNote { note_index, new_index },
+                            SelectionAction::AddOneToSelected { note_index, new_index },
                         );
                     }
-                    ChangeSelection::UnselectOne { note_index } => {
-                        let note = self.selected.notes.remove(note_index);
-                        let new_index = self.midi_notes.add(note);
 
-                        history.add_selection(
-                            self.track_id,
-                            SelectionAction::DeselectNote { note_index, new_index },
-                        );
-                    }
-                    ChangeSelection::UnselectAllButOne { note_index } => {
-                        let selected_note = self.selected.notes.remove(note_index);
-                        let new_indices = self.selected.notes.drain(&mut self.midi_notes);
-                        self.selected.notes.add(selected_note);
-
-                        history.add_selection(
-                            self.track_id,
-                            SelectionAction::DeselectAllButOne { note_index, new_indices },
-                        );
-                    }
                     ChangeSelection::SelectOne { note_index } => {
                         let selected_note = self.midi_notes.remove(note_index);
                         let new_indices = self.selected.notes.drain(&mut self.midi_notes);
-                        self.selected.notes.add(selected_note);
+                        let new_note_index = self.selected.notes.add(selected_note);
 
                         history.add_selection(
                             self.track_id,
-                            SelectionAction::SelectOne { note_index, new_indices },
+                            SelectionAction::SelectOne { note_index, new_indices, new_note_index },
                         );
                     }
 
@@ -199,56 +217,35 @@ impl Track {
                 self.selection_square_cache.clear();
             }
 
-            // TrackMessage::Dragged { delta_pitch, delta_time, mut original_notes } => {
             TrackMessage::Dragged { cursor_delta, original_notes } => {
-                // println!("");
-                // let original_notes = original_notes.clone();
-                // let mut modified_notes: MidiNotes = original_notes.clone();
-                // modified_notes.modify_all_notes(|mut note| {
-                //     let chromatic_starting_pitch = note.pitch.get();
-
-                //     let scale_starting_pitch = self
-                //         .grid
-                //         .scale
-                //         .from_chromatic_index_to_scale_index(chromatic_starting_pitch)
-                //         as i8;
-
-                //     let mut new_pitch_index =
-                //         (scale_starting_pitch + cursor_delta.y as i8) as usize;
-
-                //     // if the new_pitch_index is out of bounds, cancel the move
-                //     if new_pitch_index >= self.grid.scale.midi_size() {
-                //         new_pitch_index = scale_starting_pitch as usize;
-                //     }
-
-                //     let new_pitch = self.grid.scale.midi_range[new_pitch_index] as i16;
-
-                //     let delta_time = cursor_delta.x;
-                //     note.pitch = Pitch(new_pitch);
-
-                //     note.start = note.start + delta_time;
-                //     note.end = note.end + delta_time;
-                // });
-
-                // println!("original_notes: {:?}", original_notes);
+                self.last_cursor_delta = cursor_delta;
 
                 let mut modified_notes: MidiNotes = original_notes.clone();
-                modified_notes.drag_all_notes(cursor_delta, &self.grid);
+                let (delta_time, delta_pitch) =
+                    modified_notes.drag_all_notes(cursor_delta, &self.grid);
+
+                self.drag.delta_time = delta_time;
+                self.drag.delta_pitch = delta_pitch;
 
                 self.selected.notes.clear();
                 self.selected.notes.add_midi_notes(modified_notes.clone());
                 self.selected_notes_cache.clear();
                 self.notes_cache.clear();
+            }
 
-                history.add_track_action(self.track_id, TrackAction::DraggedNotes { cursor_delta });
+            TrackMessage::FinishDragging { drag, scale } => {
+                history.add_track_action(self.track_id, TrackAction::DraggedNotes { drag, scale });
             }
 
             TrackMessage::ResizedNotes { mut original_notes, delta_time, resize_end } => {
-                original_notes.resize_all_notes(resize_end, delta_time);
-
+                self.last_delta_time = delta_time;
+                let delta_time = original_notes.resize_all_notes(resize_end, delta_time);
+                self.drag.delta_time = delta_time;
                 self.selected.notes = original_notes;
                 self.selected_notes_cache.clear();
+            }
 
+            TrackMessage::FinishResizingNote { delta_time, resize_end } => {
                 history.add_track_action(
                     self.track_id,
                     TrackAction::ResizedNotes { delta_time, resize_end },
@@ -295,68 +292,168 @@ impl Track {
             }
 
             TrackMessage::Undo(track_action) => {
-                let mut selection_undo = true;
+                self.handle_track_undo(track_action);
+            }
 
-                match track_action {
-                    TrackAction::AddNote { note_index_after, .. } => {
-                        self.midi_notes.remove(note_index_after);
+            TrackMessage::Redo(action) => {
+                self.notes_cache.clear();
+                self.selected_notes_cache.clear();
+                match action {
+                    TrackAction::AddNote { note_to_add, .. } => {
+                        self.midi_notes.add(note_to_add.clone());
                     }
-                    TrackAction::AddManyNotes { note_indices_after, .. } => {
-                        self.midi_notes.remove_notes(note_indices_after);
+                    TrackAction::AddManyNotes { notes_to_add, .. } => {
+                        self.midi_notes.add_midi_notes(notes_to_add.clone());
                     }
-                    TrackAction::RemoveNote { note_before, .. } => {
-                        self.midi_notes.add(note_before);
+                    TrackAction::RemoveNote { note_index_before, .. } => {
+                        self.midi_notes.remove(note_index_before);
                     }
-                    TrackAction::RemoveManyNotes { notes_before_deletion, .. } => {
-                        self.midi_notes.add_midi_notes(notes_before_deletion);
+                    TrackAction::RemoveManyNotes { note_indices_before, .. } => {
+                        self.midi_notes.remove_notes(note_indices_before);
                     }
-                    TrackAction::DraggedNotes { cursor_delta, .. } => {
-                        // self.midi_notes.remove(note_index_after);
+                    TrackAction::DraggedNotes { drag, scale } => {
+                        let mut modified_notes: MidiNotes = self.selected.notes.clone();
+
+                        for v in modified_notes.notes.iter_mut() {
+                            for note in v.iter_mut() {
+                                note.reposition(drag.delta_pitch, drag.delta_time, &scale);
+                            }
+                        }
+
+                        self.selected.notes.clear();
+                        self.selected.notes.add_midi_notes(modified_notes.clone());
                     }
                     TrackAction::ResizedNotes { delta_time, resize_end } => {
-                        // self.selected.notes.remove_notes(note_indices_after);
-                    } // _ => {}
-                    TrackAction::SelectionAction(selection_action) => {
-                        match selection_action {
-                            SelectionAction::SelectNote { note_index, new_index } => {}
-                            SelectionAction::DeselectNote { note_index, new_index } => {}
-                            SelectionAction::SelectManyNotes { note_indices, new_indices } => {}
-                            SelectionAction::DeselectManyNotes { note_indices, new_indices } => {}
-                            SelectionAction::SelectAllNotes { new_indices } => {}
-                            SelectionAction::DeselectAllNotes { new_indices } => {}
-                            SelectionAction::DeselectAllButOne { note_index, new_indices } => {}
-                            SelectionAction::SelectOne { note_index, new_indices } => {}
+                        for notes_in_pitch in self.selected.notes.notes.iter_mut() {
+                            for note in notes_in_pitch.iter_mut() {
+                                note.resize(resize_end, delta_time);
+                            }
                         }
-                        selection_undo = false;
+                    }
+                    TrackAction::SelectionAction(selection_action) => match selection_action {
+                        SelectionAction::DrainSelect { .. } => {
+                            self.selected.notes.drain(&mut self.midi_notes);
+                        }
+                        SelectionAction::UnselectOne { note_index, .. } => {
+                            let note = self.selected.notes.remove(note_index);
+                            self.midi_notes.add(note);
+                        }
+                        // SelectionAction::DeselectManyNotes { note_indices, new_indices } => {}
+                        SelectionAction::UnselectAllButOne { note_index, .. } => {
+                            let selected_note = self.selected.notes.remove(note_index);
+                            self.selected.notes.drain(&mut self.midi_notes);
+                            self.selected.notes.add(selected_note);
+                        }
+
+                        SelectionAction::SelectAllNotes { .. } => {
+                            self.midi_notes.drain(&mut self.selected.notes);
+                        }
+                        SelectionAction::AddOneToSelected { note_index, .. } => {
+                            let note = self.midi_notes.remove(note_index);
+                            self.selected.notes.add(note);
+                        }
+                        SelectionAction::SelectOne { note_index, .. } => {
+                            let selected_note = self.midi_notes.remove(note_index);
+                            self.selected.notes.drain(&mut self.midi_notes);
+                            self.selected.notes.add(selected_note);
+                        }
+
+                        SelectionAction::SelectManyNotes { note_indices, .. } => {
+                            let removed_notes = self.midi_notes.remove_notes(note_indices.clone());
+                            self.selected.notes.add_midi_notes(removed_notes);
+                        }
+                    },
+                };
+            }
+        }
+    }
+
+    fn handle_track_undo(&mut self, track_action: TrackAction) {
+        match track_action {
+            TrackAction::AddNote { note_index_after, .. } => {
+                self.midi_notes.remove(note_index_after);
+                self.notes_cache.clear();
+            }
+            TrackAction::AddManyNotes { note_indices_after, .. } => {
+                self.midi_notes.remove_notes(note_indices_after);
+                self.notes_cache.clear();
+            }
+            TrackAction::RemoveNote { note_before, .. } => {
+                self.midi_notes.add(note_before);
+                self.notes_cache.clear();
+            }
+            TrackAction::RemoveManyNotes { notes_before_deletion, .. } => {
+                self.midi_notes.add_midi_notes(notes_before_deletion);
+                self.notes_cache.clear();
+            }
+
+            TrackAction::DraggedNotes { drag, scale } => {
+                let mut modified_notes: MidiNotes = self.selected.notes.clone();
+
+                for v in modified_notes.notes.iter_mut() {
+                    for note in v.iter_mut() {
+                        note.reposition(-drag.delta_pitch, -drag.delta_time, &scale);
+                    }
+                }
+
+                self.selected.notes.clear();
+                self.selected.notes.add_midi_notes(modified_notes.clone());
+                self.selected_notes_cache.clear();
+                self.notes_cache.clear();
+            }
+
+            TrackAction::ResizedNotes { delta_time, resize_end } => {
+                for notes_in_pitch in self.selected.notes.notes.iter_mut() {
+                    for note in notes_in_pitch.iter_mut() {
+                        note.resize(resize_end, -delta_time);
+                    }
+                }
+                self.selected_notes_cache.clear();
+            }
+
+            TrackAction::SelectionAction(selection_action) => {
+                self.selected_notes_cache.clear();
+                self.notes_cache.clear();
+                match selection_action {
+                    SelectionAction::DrainSelect { new_indices } => {
+                        let notes = self.midi_notes.remove_notes(new_indices);
+                        self.selected.notes.add_midi_notes(notes);
+                    }
+                    SelectionAction::UnselectOne { new_index, .. } => {
+                        let note = self.midi_notes.remove(new_index);
+                        self.selected.notes.add(note);
+                    }
+                    // SelectionAction::DeselectManyNotes { new_indices, .. } => {
+                    //     let removed_notes = self.midi_notes.remove_notes(new_indices);
+                    //     self.selected.notes.add_midi_notes(removed_notes);
+                    // }
+                    SelectionAction::UnselectAllButOne { new_indices, new_note_index, .. } => {
+                        let note = self.selected.notes.remove(new_note_index);
+                        let removed_notes = self.midi_notes.remove_notes(new_indices);
+                        self.selected.notes.add_midi_notes(removed_notes);
+                        self.selected.notes.add(note);
+                    }
+
+                    SelectionAction::AddOneToSelected { new_index, .. } => {
+                        let note = self.selected.notes.remove(new_index);
+                        self.midi_notes.add(note);
+                    }
+                    SelectionAction::SelectAllNotes { new_indices } => {
+                        let notes = self.selected.notes.remove_notes(new_indices);
+                        self.midi_notes.add_midi_notes(notes);
+                    }
+                    SelectionAction::SelectManyNotes { new_indices, .. } => {
+                        let notes = self.selected.notes.remove_notes(new_indices);
+                        self.midi_notes.add_midi_notes(notes);
+                    }
+                    SelectionAction::SelectOne { new_indices, new_note_index, .. } => {
+                        let note = self.selected.notes.remove(new_note_index);
+                        let removed_notes = self.midi_notes.remove_notes(new_indices);
+                        self.selected.notes.add_midi_notes(removed_notes);
+                        self.midi_notes.add(note);
                     }
                 }
             }
-            TrackMessage::Redo(action) => match action {
-                TrackAction::AddNote { note_to_add, .. } => {
-                    self.midi_notes.add(note_to_add.clone());
-                }
-                TrackAction::AddManyNotes { notes_to_add, .. } => {
-                    self.midi_notes.add_midi_notes(notes_to_add.clone());
-                }
-                TrackAction::RemoveNote { note_index_before, .. } => {
-                    self.midi_notes.remove(note_index_before);
-                }
-                TrackAction::RemoveManyNotes { note_indices_before, .. } => {
-                    self.midi_notes.remove_notes(note_indices_before);
-                }
-                TrackAction::DraggedNotes { cursor_delta, .. } => {}
-                TrackAction::ResizedNotes { delta_time, resize_end } => {}
-                TrackAction::SelectionAction(selection_action) => match selection_action {
-                    SelectionAction::SelectNote { note_index, new_index } => {}
-                    SelectionAction::DeselectNote { note_index, new_index } => {}
-                    SelectionAction::SelectManyNotes { note_indices, new_indices } => {}
-                    SelectionAction::DeselectManyNotes { note_indices, new_indices } => {}
-                    SelectionAction::SelectAllNotes { new_indices } => {}
-                    SelectionAction::DeselectAllNotes { new_indices } => {}
-                    SelectionAction::DeselectAllButOne { note_index, new_indices } => {}
-                    SelectionAction::SelectOne { note_index, new_indices } => {}
-                },
-            },
         }
     }
 }
@@ -371,9 +468,11 @@ pub enum TrackMessage {
     DeleteMidiNotes { notes_to_delete: Vec<NoteIndex> },
     UpdateSelection { change_selection: ChangeSelection },
     Dragged { cursor_delta: Vector, original_notes: MidiNotes },
-    // FinishDragging,
+    FinishDragging { drag: Drag, scale: Scale },
+
     ResizedNotes { delta_time: f32, original_notes: MidiNotes, resize_end: NoteEdge },
-    // FinishResizingNote,
+    FinishResizingNote { delta_time: f32, resize_end: NoteEdge },
+
     Selecting { selecting_square: Rectangle, direct_selecting_square: Rectangle },
     // FinishSelecting {
     //     selecting_square: Rectangle,
@@ -455,21 +554,20 @@ impl canvas::Program<TrackMessage, PianoTheme> for Track {
         let music_scale_cursor = self.grid.adjust_to_music_scale(projected_cursor);
 
         match event {
-            Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) => {
-                if modifiers.shift() {
-                    track_state.grid_interaction = GridInteraction::Panning {
-                        translation: self.grid.translation,
-                        start: cursor_position,
-                        // initial_cursor_pos: cursor_position,
-                        // initial_grid_offset: self.grid.offset,
-                    };
-                } else {
-                    track_state.grid_interaction = GridInteraction::None;
-                }
+            // Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) => {
+            //     if modifiers.shift() {
+            //         track_state.grid_interaction = GridInteraction::Panning {
+            //             translation: self.grid.translation,
+            //             start: cursor_position,
+            //             // initial_cursor_pos: cursor_position,
+            //             // initial_grid_offset: self.grid.offset,
+            //         };
+            //     } else {
+            //         track_state.grid_interaction = GridInteraction::None;
+            //     }
 
-                (event::Status::Captured, Some(TrackMessage::ModifiersChanged(modifiers)))
-            }
-
+            //     (event::Status::Captured, Some(TrackMessage::ModifiersChanged(modifiers)))
+            // }
             Event::Keyboard(keyboard::Event::KeyPressed { key_code, .. })
                 if key_code == keyboard::KeyCode::B =>
             {
@@ -510,11 +608,23 @@ impl canvas::Program<TrackMessage, PianoTheme> for Track {
                     }
                     NoteInteraction::Dragging { .. } => {
                         track_state.note_interaction = NoteInteraction::None;
-                        // return (event::Status::Captured, Some(TrackMessage::FinishDragging));
+
+                        return (
+                            event::Status::Captured,
+                            Some(TrackMessage::FinishDragging {
+                                drag: self.drag,
+                                scale: self.grid.scale.clone(),
+                            }),
+                        );
                     }
-                    NoteInteraction::Resizing { .. } => {
+                    NoteInteraction::Resizing { resize_end, .. } => {
                         track_state.note_interaction = NoteInteraction::None;
-                        // return (event::Status::Captured, Some(TrackMessage::FinishResizingNote));
+                        let delta_time = self.drag.delta_time;
+
+                        return (
+                            event::Status::Captured,
+                            Some(TrackMessage::FinishResizingNote { delta_time, resize_end }),
+                        );
                     }
                     NoteInteraction::WriteNoteMode { .. } => {
                         track_state.note_interaction = NoteInteraction::WriteNoteMode(false);
@@ -671,13 +781,13 @@ impl canvas::Program<TrackMessage, PianoTheme> for Track {
 
                 match &track_state.note_interaction {
                     inter @ NoteInteraction::Resizing { .. } => {
-                        return inter.handle_resizing(music_scale_cursor);
+                        return inter.handle_resizing(music_scale_cursor, self);
                     }
                     inter @ NoteInteraction::Selecting { .. } => {
                         return inter.handle_selecting(projected_cursor, music_scale_cursor);
                     }
                     inter @ NoteInteraction::Dragging { .. } => {
-                        return inter.handle_dragging(projected_cursor, !self.modifiers.alt());
+                        return inter.handle_dragging(projected_cursor, self);
                     }
                     inter @ NoteInteraction::WriteNoteMode(_) => {
                         return inter.handle_note_writing(music_scale_cursor, &self);

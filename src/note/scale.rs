@@ -18,7 +18,7 @@ pub fn test() {
     println!("range: {:?}", scale.get_range(55, 12));
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Scale {
     pub scale_type: ScaleType,
     pub root: u8,
@@ -26,7 +26,7 @@ pub struct Scale {
 }
 
 #[allow(dead_code)]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum ScaleType {
     Major,
     Minor,

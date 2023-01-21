@@ -85,8 +85,6 @@ impl Grid {
     // If the scale is chromatic, nothing changes, but if the scale is anything else, the
     // y value will skip over notes that are not in the scale.
     pub fn adjust_to_music_scale(&self, mut point: Point) -> Point {
-        println!("adjust_to_music_scale: {:?}", point);
-
         let y_whole = point.y.abs().floor();
 
         let scale_size = self.scale.midi_size() as i16;

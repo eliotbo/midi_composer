@@ -418,7 +418,8 @@ impl MidiNotes {
         }
     }
 
-    pub fn drag_all_notes(&mut self, delta_cursor: Vector, grid: &Grid) {
+    // returns the delta time and delta pitch
+    pub fn drag_all_notes(&mut self, delta_cursor: Vector, grid: &Grid) -> (f32, i8) {
         // Maybe we should keep track of the minimum start time somewhere to avoid this big O(n) search
         let note_with_minimum_start = self
             .notes
@@ -439,8 +440,8 @@ impl MidiNotes {
         let new_start = note_with_minimum_start.get_new_start(delta_cursor);
 
         // get the pitch index relative to the current music scale
-        let min_scaled_pitch = note_with_minimum_pitch.get_scaled_pitch(grid);
-        let max_scaled_pitch = note_with_maximum_pitch.get_scaled_pitch(grid);
+        let min_scaled_pitch = note_with_minimum_pitch.get_scaled_pitch(&grid.scale);
+        let max_scaled_pitch = note_with_maximum_pitch.get_scaled_pitch(&grid.scale);
 
         // the grid is scaled such that a unit in the x direction is equal to a beat
         // and a unit in the y direction is equal to a pitch
@@ -476,17 +477,21 @@ impl MidiNotes {
             delta_pitch = (grid.scale.midi_size() as i16 - (max_scaled_pitch as i16)) as i8 - 2;
         }
 
+        // let mut absolute_delta_pitch = 0;
         for notes_in_pitch in self.notes.iter_mut() {
             for note in notes_in_pitch.iter_mut() {
                 //
                 // apply transformation to all notes
-                note.reposition(delta_pitch, delta_time, grid);
+
+                note.reposition(delta_pitch, delta_time, &grid.scale);
             }
         }
+
+        return (delta_time, delta_pitch);
     }
 
     // TODO: optimize this.
-    pub fn resize_all_notes(&mut self, resize_end: NoteEdge, mut delta_time: f32) {
+    pub fn resize_all_notes(&mut self, resize_end: NoteEdge, mut delta_time: f32) -> f32 {
         // more efficient with for loop with a continue on empty vecs
         let mut note_with_minimum_start = self
             .notes
@@ -500,42 +505,26 @@ impl MidiNotes {
 
         note_with_minimum_start.resize(resize_end, delta_time);
 
-        let delta_len = (note_with_minimum_start.end - note_with_minimum_start.start)
-            - (backup_min_start_note.end - backup_min_start_note.start);
-
         if let NoteEdge::Start = resize_end {
             delta_time = note_with_minimum_start.start - backup_min_start_note.start;
         } else {
             delta_time = note_with_minimum_start.end - backup_min_start_note.end;
         }
 
-        let mut new_delta_time = 0.0;
-        let mut overide_delta_time = false;
-
         // if the minimum start is moved below 1.0 (the start beat of the grid),
         // then block it there
         if note_with_minimum_start.start < 1.0 {
-            overide_delta_time = true;
-            new_delta_time = 1.0 - backup_min_start_note.start;
+            // overide_delta_time = true;
+            delta_time = 1.0 - backup_min_start_note.start;
         }
 
         for notes_in_pitch in self.notes.iter_mut() {
             for note in notes_in_pitch.iter_mut() {
                 // apply transformation to all notes
                 note.resize(resize_end, delta_time);
-
-                // revert transformation if it would move the minimum start below 1.0
-                if overide_delta_time {
-                    // for both dragging and resizing
-                    note.start += new_delta_time - delta_time;
-
-                    // only for case of dragging the whole notes to the left
-                    if delta_len.abs() < 0.0000001 {
-                        note.end += new_delta_time - delta_time;
-                    }
-                }
             }
         }
+        delta_time
     }
 
     // TODO: optimize using only the notes that can be currently viewed
@@ -733,11 +722,11 @@ impl MidiNote {
         self.pitch.get()
     }
 
-    pub fn get_scaled_pitch(&mut self, grid: &Grid) -> i8 {
+    pub fn get_scaled_pitch(&mut self, scale: &Scale) -> i8 {
         let chromatic_starting_pitch = self.pitch.get();
 
         let scale_starting_pitch =
-            grid.scale.from_chromatic_index_to_scale_index(chromatic_starting_pitch) as i8;
+            scale.from_chromatic_index_to_scale_index(chromatic_starting_pitch) as i8;
 
         scale_starting_pitch
 
@@ -749,11 +738,11 @@ impl MidiNote {
     }
 
     // pub fn reposition(&mut self, cursor_delta: Vector, grid: &Grid) {
-    pub fn reposition(&mut self, delta_pitch: i8, delta_time: f32, grid: &Grid) {
+    pub fn reposition(&mut self, delta_pitch: i8, delta_time: f32, scale: &Scale) -> i8 {
         let chromatic_starting_pitch = self.pitch.get();
 
         let scale_starting_pitch =
-            grid.scale.from_chromatic_index_to_scale_index(chromatic_starting_pitch) as i8;
+            scale.from_chromatic_index_to_scale_index(chromatic_starting_pitch) as i8;
 
         let new_pitch_index = (scale_starting_pitch + delta_pitch) as usize;
 
@@ -764,13 +753,15 @@ impl MidiNote {
 
         // println!("new_pitch_index: {}", new_pitch_index);
 
-        let new_pitch = grid.scale.midi_range[new_pitch_index] as i16;
+        let new_pitch = scale.midi_range[new_pitch_index] as i16;
 
         // let delta_time = cursor_delta.x;
         self.pitch = Pitch(new_pitch);
 
         self.start = self.start + delta_time;
         self.end = self.end + delta_time;
+
+        return new_pitch as i8 - chromatic_starting_pitch as i8;
     }
 
     pub fn resize(&mut self, resize_end: NoteEdge, delta_time: f32) {
@@ -990,9 +981,14 @@ impl NoteInteraction {
     pub fn handle_resizing(
         &self,
         music_scale_cursor: Point,
+        track: &crate::track::Track,
     ) -> (event::Status, Option<crate::track::TrackMessage>) {
         if let NoteInteraction::Resizing { initial_cursor_pos, original_notes, resize_end } = self {
             let cursor_delta = music_scale_cursor - *initial_cursor_pos;
+
+            if cursor_delta.x == track.last_delta_time {
+                return (event::Status::Ignored, None);
+            }
 
             return (
                 event::Status::Captured,
@@ -1036,7 +1032,7 @@ impl NoteInteraction {
     pub fn handle_dragging(
         &self,
         projected_cursor: Point,
-        alt: bool,
+        track: &crate::track::Track,
     ) -> (event::Status, Option<crate::track::TrackMessage>) {
         if let NoteInteraction::Dragging { initial_cursor_pos, original_notes } = self {
             let mut floor_cursor = Vector::new(projected_cursor.x, projected_cursor.y.floor());
@@ -1046,7 +1042,7 @@ impl NoteInteraction {
             let mut cursor_delta: Vector = (projected_cursor - *initial_cursor_pos).into();
 
             // snap to beat
-            if alt {
+            if !track.modifiers.alt() {
                 // music_floor_cursor.x = music_floor_cursor.x.floor();
                 // music_floor_initial_cursor.x = music_floor_initial_cursor.x.floor();
                 // music_cursor_delta =
@@ -1055,6 +1051,13 @@ impl NoteInteraction {
                 floor_cursor.x = floor_cursor.x.floor();
                 floor_initial_cursor.x = floor_initial_cursor.x.floor();
                 cursor_delta = (floor_cursor - floor_initial_cursor).into();
+            }
+
+            // TODO: check if the notes actually changed position,
+            // if they didn't, don't send a message!!!
+
+            if cursor_delta == track.last_cursor_delta {
+                return (event::Status::Ignored, None);
             }
 
             return (

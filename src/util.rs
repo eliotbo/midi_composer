@@ -24,13 +24,41 @@ impl History {
         }
         self.action_sequence.get(self.head_position).cloned()
     }
+
+    // pub fn undo(&mut self) -> Vec<Action> {
+    // println!("head position: {}", self.head_position);
+    // let mut actions = vec![];
+    // loop {
+    //     if self.head_position > 0 {
+    //         self.head_position -= 1;
+    //     } else {
+    //         break;
+    //     }
+
+    //     if let Some(action) = self.action_sequence.get(self.head_position) {
+    //         actions.push(action.clone());
+
+    //         if let Action::TrackAction(TrackId, crate::util::TrackAction::SelectionAction(_)) =
+    //             action
+    //         {
+    //             break;
+    //         }
+    //     } else {
+    //         break;
+    //     }
+    // }
+    // actions.reverse();
+    // actions
+    // }
     pub fn redo(&mut self) -> Option<Action> {
+        // println!("head position: {}", self.head_position);
+        let action = self.action_sequence.get(self.head_position).cloned();
         if self.head_position < self.action_sequence.len() {
             self.head_position += 1;
         } else {
             return None;
         }
-        self.action_sequence.get(self.head_position).cloned()
+        action
     }
 
     pub fn add_track_action(&mut self, track_id: TrackId, action: TrackAction) {
@@ -61,21 +89,46 @@ pub enum TrackAction {
     AddManyNotes { note_indices_after: Vec<NoteIndex>, notes_to_add: MidiNotes },
     RemoveNote { note_index_before: NoteIndex, note_before: MidiNote },
     RemoveManyNotes { note_indices_before: Vec<NoteIndex>, notes_before_deletion: MidiNotes },
-    DraggedNotes { cursor_delta: Vector },
+    DraggedNotes { drag: crate::track::Drag, scale: crate::note::scale::Scale },
     ResizedNotes { delta_time: f32, resize_end: NoteEdge },
     SelectionAction(SelectionAction),
 }
 
 #[derive(Debug, Clone)]
 pub enum SelectionAction {
-    SelectNote { note_index: NoteIndex, new_index: NoteIndex },
-    DeselectNote { note_index: NoteIndex, new_index: NoteIndex },
-    SelectManyNotes { note_indices: Vec<NoteIndex>, new_indices: Vec<NoteIndex> },
-    DeselectManyNotes { note_indices: Vec<NoteIndex>, new_indices: Vec<NoteIndex> },
-    SelectAllNotes { new_indices: Vec<NoteIndex> },
-    DeselectAllNotes { new_indices: Vec<NoteIndex> },
-    DeselectAllButOne { note_index: NoteIndex, new_indices: Vec<NoteIndex> },
-    SelectOne { note_index: NoteIndex, new_indices: Vec<NoteIndex> },
+    DrainSelect {
+        new_indices: Vec<NoteIndex>,
+    },
+    AddOneToSelected {
+        note_index: NoteIndex,
+        new_index: NoteIndex,
+    },
+    UnselectOne {
+        note_index: NoteIndex,
+        new_index: NoteIndex,
+    },
+    SelectManyNotes {
+        note_indices: Vec<NoteIndex>,
+        new_indices: Vec<NoteIndex>,
+    },
+    // DeselectManyNotes {
+    //     note_indices: Vec<NoteIndex>,
+    //     new_indices: Vec<NoteIndex>,
+    // },
+    SelectAllNotes {
+        new_indices: Vec<NoteIndex>,
+    },
+
+    UnselectAllButOne {
+        note_index: NoteIndex,
+        new_indices: Vec<NoteIndex>,
+        new_note_index: NoteIndex,
+    },
+    SelectOne {
+        note_index: NoteIndex,
+        new_indices: Vec<NoteIndex>,
+        new_note_index: NoteIndex,
+    },
 }
 
 #[allow(dead_code)]

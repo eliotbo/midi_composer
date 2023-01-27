@@ -13,10 +13,11 @@ use super::scale::Scale;
 use crate::config::{BEAT_SIZE, NOTE_LABELS, NOTE_SIZE, RESIZE_BOX_PIXEL_WIDTH};
 use crate::track::TrackMessage;
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct MidiNotes {
     // organized by pitch and then by time
     pub notes: Vec<Vec<MidiNote>>,
+    pub number_of_notes: usize,
     pub start_time: f32, // TODO: keep track of start and end time when adding/deleting notes
     pub end_time: f32,
 }
@@ -36,6 +37,12 @@ where
                 Some(cmp)
             })
             .all(|b| b),
+    }
+}
+
+impl Default for MidiNotes {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -74,7 +81,7 @@ impl MidiNotes {
         for _ in 0..128 {
             notes.push(Vec::new());
         }
-        Self { notes, start_time: 1.0, end_time: 5.0 }
+        Self { notes, start_time: 1.0, end_time: 5.0, number_of_notes: 0 }
     }
 
     pub fn clear(&mut self) {
@@ -94,10 +101,25 @@ impl MidiNotes {
         // let drained: MidiNotes = MidiNotes { notes: self.notes.drain(..).collect() };
         // let all_note_indices = self.get_all_note_indices();
         let drained: MidiNotes = std::mem::replace(self, Self::new());
-        recipient.add_midi_notes(drained)
+        self.number_of_notes = 0;
+
+        recipient.add_midi_notes(&drained)
+
         // all_note_indices
         // _ = std::mem::replace(self, Self::new());
     }
+
+    pub fn delete_all(&mut self) -> Self {
+        let drained: MidiNotes = std::mem::replace(self, Self::new());
+        self.number_of_notes = 0;
+
+        drained
+    }
+
+    // pub fn delete(&mut self, note_index: NoteIndex) {
+    //     self.notes[note_index.pitch_index].remove(note_index.time_index);
+    //     self.number_of_notes -= 1;
+    // }
 
     pub fn get_all_note_indices(&self) -> Vec<NoteIndex> {
         let mut note_indices = Vec::new();
@@ -111,15 +133,15 @@ impl MidiNotes {
 
     pub fn add_notes_vec(&mut self, notes: Vec<MidiNote>) {
         for note in notes {
-            self.add(note);
+            self.add(&note);
         }
     }
 
-    pub fn add_midi_notes(&mut self, midi_notes: MidiNotes) -> Vec<NoteIndex> {
+    pub fn add_midi_notes(&mut self, midi_notes: &MidiNotes) -> Vec<NoteIndex> {
         let mut note_indices = Vec::new();
-        for notes in midi_notes.notes {
+        for notes in midi_notes.notes.iter() {
             for note in notes {
-                let note_index = self.add(note);
+                let note_index = self.add(&note);
                 note_indices.push(note_index);
             }
         }
@@ -146,7 +168,7 @@ impl MidiNotes {
     // 2) add a field to MidiNotes that keeps track of the last
     //      inserted note for each pitch.
     //
-    pub fn add(&mut self, note: MidiNote) -> NoteIndex {
+    pub fn add(&mut self, note: &MidiNote) -> NoteIndex {
         // convert pitch to index
         // insert note into notes
         // sort notes by start time
@@ -158,6 +180,7 @@ impl MidiNotes {
         let mut time_index: isize = -1;
         let mut found_index = false;
         let mut notes_to_remove = Vec::new();
+        self.number_of_notes += 1;
 
         // resolve conflicts where a note ends after another note starts
         //
@@ -183,6 +206,7 @@ impl MidiNotes {
         notes_to_remove.reverse();
 
         for i in notes_to_remove {
+            self.number_of_notes -= 1;
             self.notes[pitch].remove(i);
             if (i as isize) < time_index {
                 time_index -= 1;
@@ -193,16 +217,26 @@ impl MidiNotes {
             time_index = self.notes[pitch].len() as isize;
         }
 
-        self.notes[pitch].insert(time_index as usize, note);
+        self.notes[pitch].insert(time_index as usize, note.clone());
 
         NoteIndex { pitch_index: pitch, time_index: time_index as usize }
 
         // self.notes[index].sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
     }
 
-    pub fn remove(&mut self, note_index: NoteIndex) -> MidiNote {
+    pub fn remove(&mut self, note_index: &NoteIndex) -> MidiNote {
         self.notes[note_index.pitch_index].remove(note_index.time_index)
     }
+
+    // pub fn remove_all(&mut self) -> Vec<MidiNote> {
+    //     let mut removed_notes = Vec::new();
+    //     for pitch in self.notes.iter_mut() {
+    //         for note in pitch.iter() {
+    //             removed_notes.push(note.clone());
+    //         }
+    //     }
+    //     notes
+    // }
 
     // TODO: get the visible regions and filter the notes accordingly using overlaps and
     // then compute their exact positions using the start and end times, and
@@ -299,124 +333,124 @@ impl MidiNotes {
         notes
     }
 
-    // TODO: optimize this. Maybe get rid of it in favor of specific drag_all and resize_all functions
-    pub fn modify_all_notes(&mut self, f: impl Fn(&mut MidiNote) -> ()) {
-        // more efficient with for loop with a continue on empty vecs
-        let mut note_with_minimum_start = self
-            .notes
-            .iter()
-            .flatten()
-            .min_by(|a, b| a.start.partial_cmp(&b.start).unwrap())
-            .unwrap()
-            .clone();
+    // // TODO: optimize this. Maybe get rid of it in favor of specific drag_all and resize_all functions
+    // pub fn modify_all_notes(&mut self, f: impl Fn(&mut MidiNote) -> ()) {
+    //     // more efficient with for loop with a continue on empty vecs
+    //     let mut note_with_minimum_start = self
+    //         .notes
+    //         .iter()
+    //         .flatten()
+    //         .min_by(|a, b| a.start.partial_cmp(&b.start).unwrap())
+    //         .unwrap()
+    //         .clone();
 
-        // more efficient to reverse and break in a for loop
-        let mut note_with_minimum_pitch = self
-            .notes
-            .iter()
-            .flatten()
-            .min_by(|a, b| a.pitch.get().partial_cmp(&b.pitch.get()).unwrap())
-            .unwrap()
-            .clone();
+    //     // more efficient to reverse and break in a for loop
+    //     let mut note_with_minimum_pitch = self
+    //         .notes
+    //         .iter()
+    //         .flatten()
+    //         .min_by(|a, b| a.pitch.get().partial_cmp(&b.pitch.get()).unwrap())
+    //         .unwrap()
+    //         .clone();
 
-        // more efficient to break in a for loop
-        let mut note_with_maximum_pitch = self
-            .notes
-            .iter()
-            .flatten()
-            .max_by(|a, b| a.pitch.get().partial_cmp(&b.pitch.get()).unwrap())
-            .unwrap()
-            .clone();
+    //     // more efficient to break in a for loop
+    //     let mut note_with_maximum_pitch = self
+    //         .notes
+    //         .iter()
+    //         .flatten()
+    //         .max_by(|a, b| a.pitch.get().partial_cmp(&b.pitch.get()).unwrap())
+    //         .unwrap()
+    //         .clone();
 
-        let backup_min_start_note = note_with_minimum_start.clone();
-        let backup_min_pitch_note = note_with_minimum_pitch.clone();
-        let backup_max_pitch_note = note_with_maximum_pitch.clone();
+    //     let backup_min_start_note = note_with_minimum_start.clone();
+    //     let backup_min_pitch_note = note_with_minimum_pitch.clone();
+    //     let backup_max_pitch_note = note_with_maximum_pitch.clone();
 
-        f(&mut note_with_minimum_start);
-        f(&mut note_with_minimum_pitch);
-        f(&mut note_with_maximum_pitch);
+    //     f(&mut note_with_minimum_start);
+    //     f(&mut note_with_minimum_pitch);
+    //     f(&mut note_with_maximum_pitch);
 
-        //
-        //
-        // time
-        let delta_len = (note_with_minimum_start.end - note_with_minimum_start.start)
-            - (backup_min_start_note.end - backup_min_start_note.start);
-        let delta_time = note_with_minimum_start.start - backup_min_start_note.start;
+    //     //
+    //     //
+    //     // time
+    //     let delta_len = (note_with_minimum_start.end - note_with_minimum_start.start)
+    //         - (backup_min_start_note.end - backup_min_start_note.start);
+    //     let delta_time = note_with_minimum_start.start - backup_min_start_note.start;
 
-        let mut new_delta_time = 0.0;
-        let mut overide_delta_time = false;
+    //     let mut new_delta_time = 0.0;
+    //     let mut overide_delta_time = false;
 
-        // if the minimum start is moved below 1.0 (the start beat of the grid),
-        // then block it there
-        if note_with_minimum_start.start < 1.0 {
-            overide_delta_time = true;
-            new_delta_time = 1.0 - backup_min_start_note.start;
-        }
+    //     // if the minimum start is moved below 1.0 (the start beat of the grid),
+    //     // then block it there
+    //     if note_with_minimum_start.start < 1.0 {
+    //         overide_delta_time = true;
+    //         new_delta_time = 1.0 - backup_min_start_note.start;
+    //     }
 
-        //
-        //
-        // min pitch
-        let delta_pitch_min =
-            note_with_minimum_pitch.pitch.0 - backup_min_pitch_note.pitch.get() as i16;
+    //     //
+    //     //
+    //     // min pitch
+    //     let delta_pitch_min =
+    //         note_with_minimum_pitch.pitch.0 - backup_min_pitch_note.pitch.get() as i16;
 
-        let mut new_delta_pitch_min = 0;
-        let mut overide_delta_pitch_min = false;
+    //     let mut new_delta_pitch_min = 0;
+    //     let mut overide_delta_pitch_min = false;
 
-        // if the minimum pitch is moved below 0 (the lowest pitch of the grid),
-        // then block it there
-        if note_with_minimum_pitch.pitch.0 < 0 {
-            overide_delta_pitch_min = true;
-            new_delta_pitch_min = 0 - backup_min_pitch_note.pitch.get() as i16;
-        }
+    //     // if the minimum pitch is moved below 0 (the lowest pitch of the grid),
+    //     // then block it there
+    //     if note_with_minimum_pitch.pitch.0 < 0 {
+    //         overide_delta_pitch_min = true;
+    //         new_delta_pitch_min = 0 - backup_min_pitch_note.pitch.get() as i16;
+    //     }
 
-        //
-        //
-        // max pitch
-        let delta_pitch_max =
-            note_with_maximum_pitch.pitch.0 - backup_max_pitch_note.pitch.get() as i16;
+    //     //
+    //     //
+    //     // max pitch
+    //     let delta_pitch_max =
+    //         note_with_maximum_pitch.pitch.0 - backup_max_pitch_note.pitch.get() as i16;
 
-        let mut new_delta_pitch_max = 0;
-        let mut overide_delta_pitch_max = false;
+    //     let mut new_delta_pitch_max = 0;
+    //     let mut overide_delta_pitch_max = false;
 
-        // if the maximum pitch is moved above 127 (the highest pitch of the grid),
-        // then block it there
-        if note_with_maximum_pitch.pitch.0 > 127 {
-            overide_delta_pitch_max = true;
-            new_delta_pitch_max = 127 - backup_max_pitch_note.pitch.get() as i16;
-        }
+    //     // if the maximum pitch is moved above 127 (the highest pitch of the grid),
+    //     // then block it there
+    //     if note_with_maximum_pitch.pitch.0 > 127 {
+    //         overide_delta_pitch_max = true;
+    //         new_delta_pitch_max = 127 - backup_max_pitch_note.pitch.get() as i16;
+    //     }
 
-        for notes_in_pitch in self.notes.iter_mut() {
-            for note in notes_in_pitch.iter_mut() {
-                // apply transformation to all notes
-                f(note);
+    //     for notes_in_pitch in self.notes.iter_mut() {
+    //         for note in notes_in_pitch.iter_mut() {
+    //             // apply transformation to all notes
+    //             f(note);
 
-                // revert transformation if it would move the minimum start below 1.0
-                if overide_delta_time {
-                    // for both dragging and resizing
-                    note.start += new_delta_time - delta_time;
+    //             // revert transformation if it would move the minimum start below 1.0
+    //             if overide_delta_time {
+    //                 // for both dragging and resizing
+    //                 note.start += new_delta_time - delta_time;
 
-                    // only for case of dragging the whole notes to the left
-                    if delta_len.abs() < 0.0000001 {
-                        note.end += new_delta_time - delta_time;
-                    }
-                }
+    //                 // only for case of dragging the whole notes to the left
+    //                 if delta_len.abs() < 0.0000001 {
+    //                     note.end += new_delta_time - delta_time;
+    //                 }
+    //             }
 
-                // revert transformation if it would move the minimum pitch below 0
-                if overide_delta_pitch_min {
-                    let new_pitch = note.pitch.0 - delta_pitch_min + new_delta_pitch_min;
+    //             // revert transformation if it would move the minimum pitch below 0
+    //             if overide_delta_pitch_min {
+    //                 let new_pitch = note.pitch.0 - delta_pitch_min + new_delta_pitch_min;
 
-                    note.pitch = Pitch(new_pitch as i16);
-                }
+    //                 note.pitch = Pitch(new_pitch as i16);
+    //             }
 
-                // revert transformation if it would move the maximum pitch above 127
-                if overide_delta_pitch_max {
-                    let new_pitch = note.pitch.0 - delta_pitch_max + new_delta_pitch_max;
+    //             // revert transformation if it would move the maximum pitch above 127
+    //             if overide_delta_pitch_max {
+    //                 let new_pitch = note.pitch.0 - delta_pitch_max + new_delta_pitch_max;
 
-                    note.pitch = Pitch(new_pitch as i16);
-                }
-            }
-        }
-    }
+    //                 note.pitch = Pitch(new_pitch as i16);
+    //             }
+    //         }
+    //     }
+    // }
 
     // returns the delta time and delta pitch
     pub fn drag_all_notes(&mut self, delta_cursor: Vector, grid: &Grid) -> (f32, i8) {
@@ -617,7 +651,8 @@ impl MidiNotes {
     // remove a set of notes using a Vec<(pitch_index, time_index)>,
     // beware that starting with the lowest index will not work because
     // the indices will change as the notes are removed
-    pub fn remove_notes(&mut self, mut note_indices: Vec<NoteIndex>) -> MidiNotes {
+    pub fn remove_notes(&mut self, note_indices: &Vec<NoteIndex>) -> MidiNotes {
+        let note_indices = &mut note_indices.clone();
         note_indices.sort_by(|a, b| b.time_index.cmp(&a.time_index));
         // note_indices.reverse();
         let mut removed_notes: MidiNotes = MidiNotes::new();
@@ -625,7 +660,7 @@ impl MidiNotes {
             // println!("removing note at pitch_index: {}, time_index: {}", pitch_index, time_index);
 
             let note = self.notes[pitch_index].remove(time_index);
-            removed_notes.add(note);
+            removed_notes.add(&note);
         }
         removed_notes
     }
@@ -635,7 +670,7 @@ impl From<Vec<MidiNote>> for MidiNotes {
     fn from(notes: Vec<MidiNote>) -> Self {
         let mut midi_notes = Self::new();
         for note in notes {
-            midi_notes.add(note);
+            midi_notes.add(&note);
         }
         midi_notes
     }

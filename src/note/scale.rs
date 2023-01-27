@@ -18,11 +18,21 @@ pub fn test() {
     println!("range: {:?}", scale.get_range(55, 12));
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Scale {
     pub scale_type: ScaleType,
     pub root: u8,
     pub midi_range: Vec<u8>,
+}
+
+use std::fmt::{Debug, Formatter, Result};
+impl Debug for Scale {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        f.debug_struct("Scale")
+            .field("scale_type", &self.scale_type)
+            .field("root", &self.root)
+            .finish()
+    }
 }
 
 #[allow(dead_code)]

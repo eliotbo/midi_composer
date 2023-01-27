@@ -16,7 +16,7 @@ use iced::window;
 
 use iced::alignment;
 use iced::{Application, Command, Length, Settings, Subscription};
-use iced_native::{event, subscription, Event};
+use iced_native::{command, event, subscription, Event};
 
 pub use iced_native;
 
@@ -42,6 +42,9 @@ use crate::config::INIT_GRID_SIZE;
 use crate::util::{Action, History, TrackId};
 
 use std::collections::HashMap;
+
+// TODO: make a track active by clicking on it and deactivate all other tracks
+
 // TODO: make my own Vector type that is compatible with element-wise operations
 //
 //
@@ -70,7 +73,12 @@ struct MidiEditor {
 
 impl Default for MidiEditor {
     fn default() -> Self {
-        let tracks = vec![0, 1].iter().map(|id| (*id, Track::new(*id))).collect();
+        let mut tracks: HashMap<TrackId, Track> =
+            vec![0, 1].iter().map(|id| (*id, Track::new(*id))).collect();
+
+        let track0 = tracks.get_mut(&0).unwrap();
+        track0.is_active = true;
+
         Self {
             history: History::default(),
             tracks, // vec![Track::new(0), Track::new(1)],
@@ -102,25 +110,39 @@ impl MidiEditor {
     fn handle_undo(&mut self) -> Command<EditorMessage> {
         if let Some(action) = self.history.undo() {
             match action {
-                Action::TrackAction(track_id, track_action) => {
-                    Command::perform(async move { track_action }, move |act| {
-                        // println!("Undoing action: {:?}", act);
-                        EditorMessage::Track(track_id, TrackMessage::Undo(act))
+                Action::FromTrackId(track_id) => {
+                    Command::perform(async move { track_id }, move |track_id| {
+                        EditorMessage::Track(track_id, TrackMessage::Undo)
                     })
                 }
+
                 Action::None => Command::none(),
             }
         } else {
             Command::none()
         }
     }
-
+    // fn handle_undo(&mut self) -> Command<EditorMessage> {
+    //     if let Some(action) = self.history.undo() {
+    //         match action {
+    //             Action::TrackAction(track_id, track_action) => {
+    //                 Command::perform(async move { track_action }, move |act| {
+    //                     // println!("Undoing action: {:?}", act);
+    //                     EditorMessage::Track(track_id, TrackMessage::Undo(act))
+    //                 })
+    //             }
+    //             Action::None => Command::none(),
+    //         }
+    //     } else {
+    //         Command::none()
+    //     }
+    // }
     fn handle_redo(&mut self) -> Command<EditorMessage> {
         if let Some(action) = self.history.redo() {
             match action {
-                Action::TrackAction(track_id, track_action) => {
-                    Command::perform(async move { track_action }, move |act| {
-                        EditorMessage::Track(track_id, TrackMessage::Redo(act))
+                Action::FromTrackId(track_id) => {
+                    Command::perform(async move { track_id }, move |track_id| {
+                        EditorMessage::Track(track_id, TrackMessage::Redo)
                     })
                 }
                 Action::None => Command::none(),
@@ -183,8 +205,14 @@ impl Application for MidiEditor {
                 _ => Command::none(),
             },
             EditorMessage::ShowDebug(msg) => {
-                println!("{}", msg);
+                // println!("{}", msg);
+                println!("");
+                println!("");
+                println!("");
                 println!("{:#?}", self.history);
+                println!("");
+                println!("track 0:");
+                println!("{:#?}", self.tracks[&0].selected.notes);
                 Command::none()
             }
         }

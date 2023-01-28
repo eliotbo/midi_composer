@@ -1,6 +1,4 @@
-use iced::Vector;
-
-use crate::note::midi_notes::{MidiNote, MidiNotes, NoteEdge, NoteIndex};
+use crate::note::midi_notes::MidiNotes;
 
 // use std::collections::HashMap;
 // The only actions that matter are the ones that change the main MidiNotes

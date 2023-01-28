@@ -16,7 +16,7 @@ use iced::window;
 
 use iced::alignment;
 use iced::{Application, Command, Length, Settings, Subscription};
-use iced_native::{command, event, subscription, Event};
+use iced_native::Event;
 
 pub use iced_native;
 
@@ -32,11 +32,7 @@ pub use grid::Grid;
 pub mod note;
 pub mod util;
 
-// mod midi_notes;
-// use midi_notes::MidiNote;
-
 mod config;
-// mod scale;
 
 use crate::config::INIT_GRID_SIZE;
 use crate::util::{Action, History, TrackId};
@@ -204,7 +200,7 @@ impl Application for MidiEditor {
                 // }
                 _ => Command::none(),
             },
-            EditorMessage::ShowDebug(msg) => {
+            EditorMessage::ShowDebug(_) => {
                 // println!("{}", msg);
                 println!("");
                 println!("");

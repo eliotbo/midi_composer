@@ -3,17 +3,17 @@
 use crate::grid::Grid;
 use crate::track::TimingInfo;
 
-use iced::widget::canvas::event::{self, Event};
+use iced::widget::canvas::event::{self};
 use iced::widget::canvas::{Cache, Cursor, Geometry, Path, Stroke};
 use iced::{Color, Point, Rectangle, Size, Vector};
 
 use std::fmt;
 
 use super::scale::Scale;
-use crate::config::{BEAT_SIZE, NOTE_LABELS, NOTE_SIZE, RESIZE_BOX_PIXEL_WIDTH};
+use crate::config::{BEAT_SIZE, NOTE_LABELS, RESIZE_BOX_PIXEL_WIDTH};
 use crate::track::TrackMessage;
 
-use crate::track::undoredo::{AddedNote, ConflictHistory, DeletedNote, ResizedConflicts};
+use crate::track::actions::{AddedNote, ConflictHistory, DeletedNote, ResizedConflicts};
 
 #[derive(Clone)]
 pub struct MidiNotes {
@@ -146,9 +146,12 @@ impl MidiNotes {
 
     pub fn add_midi_notes(&mut self, midi_notes: &MidiNotes) -> Vec<AddedNote> {
         let mut added_notes = Vec::new();
+        // let mut conflict_history = ConflictHistory::default();
         for notes in midi_notes.notes.iter() {
             for note in notes {
+                // let added_note_and_conflicts = ;
                 added_notes.push(self.add(&note));
+                // conflict_history.add(conflicts);
             }
         }
         added_notes
@@ -175,105 +178,122 @@ impl MidiNotes {
     //      inserted note for each pitch.
     //
     //
-    // returns (the index of the added note, the notes that were resized, the notes that were deleted )
+    // // returns (the index of the added note, the notes that were resized, the notes that were deleted )
+    // pub fn add(&mut self, note: &MidiNote) -> AddedNote {
+    //     // convert pitch to index
+    //     // insert note into notes
+    //     // sort notes by start time
+
+    //     let pitch = note.pitch.get() as usize;
+    //     // let index = pitch ;
+    //     // TODO: insert at correct index
+
+    //     let mut time_index: isize = -1;
+    //     // let mut found_index = false;
+    //     let mut notes_to_remove = Vec::new();
+    //     let mut removed_notes: Vec<DeletedNote> = Vec::new();
+    //     let mut resized_notes: Vec<ResizedConflicts> = Vec::new();
+    //     self.number_of_notes += 1;
+
+    //     for i in 0..self.notes[pitch].len() {
+    //         let curr = self.notes[pitch][i].clone();
+
+    //         // if the start time of the new note is before the start time of the current note,
+    //         // insert the new note here.
+    //         if note.start < curr.start {
+    //             time_index = i as isize;
+    //         }
+
+    //         // if the end of the new note is before the start of the current note, insert the new note
+    //         // at the current index. No side effects needed.
+    //         if note.end <= curr.start {
+    //             break;
+    //         }
+
+    //         // if the new note partially overlaps with the current note start, shorten the
+    //         // current note using its start point.
+    //         if note.start < curr.start && note.end < curr.end {
+    //             let delta_time = curr.start - note.end;
+    //             resized_notes.push(ResizedConflicts {
+    //                 note_index: NoteIndex { pitch_index: pitch, time_index: i },
+    //                 edge: NoteEdge::Start,
+    //                 delta_time,
+    //             });
+    //             self.notes[pitch][i].start = note.end;
+    //             break;
+    //         }
+
+    //         // if the new note completely overlaps with the current note, delete the current note,
+    //         // and continue
+    //         if note.start <= curr.start && note.end >= curr.end {
+    //             notes_to_remove.push(i);
+    //             continue;
+    //         }
+
+    //         // if the new note fits within the current note, shorten the end of the current note
+    //         if note.start > curr.start && note.start < curr.end {
+    //             self.notes[pitch][i].end = note.start;
+    //             break;
+    //         }
+
+    //         // // if the new note completely overlaps the current note, remove the current note
+    //         // if (note.start >= curr.start && note.end <= curr.end)
+    //         //     || (note.start <= curr.start && note.end >= curr.end)
+    //         // {
+    //         //     notes_to_remove.push(i);
+    //         // }
+    //     }
+
+    //     // remove notes that completely overlap with the new note
+    //     notes_to_remove.reverse();
+    //     for i in notes_to_remove {
+    //         self.number_of_notes -= 1;
+    //         let removed_note = self.notes[pitch].remove(i);
+    //         removed_notes.push(DeletedNote {
+    //             note_index: NoteIndex { pitch_index: pitch, time_index: i },
+    //             removed_note,
+    //         });
+    //         if (i as isize) < time_index {
+    //             time_index -= 1;
+    //         }
+    //     }
+
+    //     // insert note
+    //     if time_index < 0 {
+    //         time_index = self.notes[pitch].len() as isize;
+    //     }
+
+    //     self.notes[pitch].insert(time_index as usize, note.clone());
+
+    //     // let mut notes_to_remove = self.resolve_conflicts(note);
+
+    //     AddedNote {
+    //         note_index_after: NoteIndex { pitch_index: pitch, time_index: time_index as usize },
+    //         note_to_add: note.clone(),
+    //         resized_notes,
+    //         removed_notes,
+    //     }
+
+    //     // self.notes[index].sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
+    // }
+
     pub fn add(&mut self, note: &MidiNote) -> AddedNote {
-        // convert pitch to index
-        // insert note into notes
-        // sort notes by start time
-
+        let conflicts = self.resolve_conflicts_single(&note);
+        let time_index = self.find_time_index(note);
         let pitch = note.pitch.get() as usize;
-        // let index = pitch ;
-        // TODO: insert at correct index
 
-        let mut time_index: isize = -1;
-        let mut found_index = false;
-        let mut notes_to_remove = Vec::new();
-        let mut removed_notes: Vec<DeletedNote> = Vec::new();
-        let mut resized_notes: Vec<ResizedConflicts> = Vec::new();
-        self.number_of_notes += 1;
-
-        for i in 0..self.notes[pitch].len() {
-            let curr = self.notes[pitch][i].clone();
-
-            // if the start time of the new note is before the start time of the current note,
-            // insert the new note here.
-            if note.start < curr.start {
-                time_index = i as isize;
-            }
-
-            // if the end of the new note is before the start of the current note, insert the new note
-            // at the current index. No side effects needed.
-            if note.end <= curr.start {
-                break;
-            }
-
-            // if the new note partially overlaps with the current note start, shorten the
-            // current note using its start point.
-            if note.start < curr.start && note.end < curr.end {
-                let delta_time = curr.start - note.end;
-                resized_notes.push(ResizedConflicts {
-                    note_index: NoteIndex { pitch_index: pitch, time_index: i },
-                    edge: NoteEdge::Start,
-                    delta_time,
-                });
-                self.notes[pitch][i].start = note.end;
-                break;
-            }
-
-            // if the new note completely overlaps with the current note, delete the current note,
-            // and continue
-            if note.start <= curr.start && note.end >= curr.end {
-                notes_to_remove.push(i);
-                continue;
-            }
-
-            // if the new note fits within the current note, shorten the end of the current note
-            if note.start > curr.start && note.start < curr.end {
-                self.notes[pitch][i].end = note.start;
-                break;
-            }
-
-            // // if the new note completely overlaps the current note, remove the current note
-            // if (note.start >= curr.start && note.end <= curr.end)
-            //     || (note.start <= curr.start && note.end >= curr.end)
-            // {
-            //     notes_to_remove.push(i);
-            // }
-        }
-
-        // remove notes that completely overlap with the new note
-        notes_to_remove.reverse();
-        for i in notes_to_remove {
-            self.number_of_notes -= 1;
-            let removed_note = self.notes[pitch].remove(i);
-            removed_notes.push(DeletedNote {
-                note_index: NoteIndex { pitch_index: pitch, time_index: i },
-                removed_note,
-            });
-            if (i as isize) < time_index {
-                time_index -= 1;
-            }
-        }
-
-        // insert note
-        if time_index < 0 {
-            time_index = self.notes[pitch].len() as isize;
-        }
-
-        self.notes[pitch].insert(time_index as usize, note.clone());
-
-        // let mut notes_to_remove = self.resolve_conflicts(note);
-
-        AddedNote {
+        let added_note = AddedNote {
             note_index_after: NoteIndex { pitch_index: pitch, time_index: time_index as usize },
             note_to_add: note.clone(),
-            resized_notes,
-            removed_notes,
-        }
+            conflicts,
+            // resized_notes: conflicts.resized,
+            // removed_notes: conflicts.deleted,
+        };
 
-        // self.notes[index].sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
+        self.notes[pitch].insert(time_index as usize, note.clone());
+        added_note
+        // (added_note, conflicts)
     }
-
     // After resize a set of notes, the notes may overlap with each other. This function
     // resolves the conflicts by resizing the notes. The note that starts later has
     // priority over the note that starts earlier, which means that the end of a note

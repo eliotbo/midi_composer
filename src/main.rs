@@ -45,6 +45,11 @@ use std::collections::HashMap;
 //
 //
 
+// TODO: contour on notes
+
+// TODO: bug when adding with conflict and then undoing: original note length is not restored
+// It's due to the definition of delta_tim in resolve_conflicts_single()
+
 pub fn main() -> iced::Result {
     // env_logger::builder().format_timestamp(None).init();
 

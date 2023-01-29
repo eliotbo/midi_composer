@@ -106,11 +106,13 @@ pub enum TrackAction {
     DraggedNotes {
         drag: crate::track::Drag,
         scale: crate::note::scale::Scale,
+        conflicts: ConflictHistory,
     },
     ResizedNotes {
         delta_time: f32,
         resize_end: NoteEdge,
         resized_conflicts: Vec<ResizedConflicts>,
+        conflicts: ConflictHistory,
     },
     SelectionAction(SelectionAction),
 }
@@ -154,22 +156,26 @@ pub enum SelectionAction {
 }
 
 impl TrackAction {
+    fn handle_conflicts(track: &mut Track, conflicts: &ConflictHistory) {
+        for removed_note in conflicts.deleted.iter() {
+            track.midi_notes.add(&removed_note.removed_note);
+        }
+
+        for resized_note in conflicts.resized.iter() {
+            let note_index = resized_note.note_index;
+            let note = &mut track.midi_notes.notes[note_index.pitch_index][note_index.time_index];
+
+            note.resize(resized_note.edge, -resized_note.delta_time);
+        }
+    }
+
     pub fn handle_undo(&self, track: &mut Track) {
         match self {
             TrackAction::AddNote { added_note } => {
                 track.midi_notes.remove(&added_note.note_index_after);
 
-                for removed_note in added_note.conflicts.deleted.iter() {
-                    track.midi_notes.add(&removed_note.removed_note);
-                }
+                Self::handle_conflicts(track, &added_note.conflicts);
 
-                for resized_note in added_note.conflicts.resized.iter() {
-                    let note_index = resized_note.note_index;
-                    let note =
-                        &mut track.midi_notes.notes[note_index.pitch_index][note_index.time_index];
-
-                    note.resize(resized_note.edge, -resized_note.delta_time);
-                }
                 track.notes_cache.clear();
             }
             TrackAction::AddManyNotes { added_notes } => {
@@ -189,7 +195,7 @@ impl TrackAction {
                 track.selected_notes_cache.clear();
             }
 
-            TrackAction::DraggedNotes { drag, scale } => {
+            TrackAction::DraggedNotes { drag, scale, conflicts } => {
                 let mut modified_notes: MidiNotes = track.selected.notes.clone();
 
                 for v in modified_notes.notes.iter_mut() {
@@ -198,19 +204,22 @@ impl TrackAction {
                     }
                 }
 
+                Self::handle_conflicts(track, &conflicts);
+
                 track.selected.notes.clear();
                 track.selected.notes.add_midi_notes(&modified_notes);
                 track.selected_notes_cache.clear();
                 track.notes_cache.clear();
             }
 
-            TrackAction::ResizedNotes { delta_time, resize_end, resized_conflicts } => {
+            TrackAction::ResizedNotes { delta_time, resize_end, resized_conflicts, conflicts } => {
                 for notes_in_pitch in track.selected.notes.notes.iter_mut() {
                     for note in notes_in_pitch.iter_mut() {
                         note.resize(*resize_end, -delta_time);
                     }
                 }
 
+                // handle conflicts within the selected notes
                 for conflict in resized_conflicts.iter() {
                     let note_index = conflict.note_index;
                     let note = &mut track.selected.notes.notes[note_index.pitch_index]
@@ -218,6 +227,9 @@ impl TrackAction {
 
                     note.resize(conflict.edge, -conflict.delta_time);
                 }
+
+                // handle conflicts between selected notes and non-selected notes
+                Self::handle_conflicts(track, &conflicts);
 
                 track.selected_notes_cache.clear();
             }
@@ -265,82 +277,82 @@ impl TrackAction {
     }
 
     pub fn handle_redo(&self, track: &mut Track) {
-        if let Some(track_action) = track.track_history.redo() {
-            track.notes_cache.clear();
-            track.selected_notes_cache.clear();
-            match track_action {
-                TrackAction::AddNote { added_note, .. } => {
-                    track.midi_notes.add(&added_note.note_to_add);
-                }
-                TrackAction::AddManyNotes { added_notes } => {
-                    let notes_to_add = added_notes
-                        .iter()
-                        .cloned()
-                        .map(|added_note| added_note.note_to_add)
-                        .collect::<Vec<_>>()
-                        .into();
+        // if let Some(track_action) = track.track_history.redo() {
+        track.notes_cache.clear();
+        track.selected_notes_cache.clear();
+        match self {
+            TrackAction::AddNote { added_note, .. } => {
+                track.midi_notes.add(&added_note.note_to_add);
+            }
+            TrackAction::AddManyNotes { added_notes } => {
+                let notes_to_add = added_notes
+                    .iter()
+                    .cloned()
+                    .map(|added_note| added_note.note_to_add)
+                    .collect::<Vec<_>>()
+                    .into();
 
-                    track.midi_notes.add_midi_notes(&notes_to_add);
-                }
-                TrackAction::RemoveNote { note_index_before, .. } => {
-                    track.midi_notes.remove(&note_index_before);
-                }
-                TrackAction::RemoveSelectedNotes { .. } => {
-                    track.selected.notes.delete_all();
-                }
-                TrackAction::DraggedNotes { drag, scale } => {
-                    let mut modified_notes: MidiNotes = track.selected.notes.clone();
+                track.midi_notes.add_midi_notes(&notes_to_add);
+            }
+            TrackAction::RemoveNote { note_index_before, .. } => {
+                track.midi_notes.remove(&note_index_before);
+            }
+            TrackAction::RemoveSelectedNotes { .. } => {
+                track.selected.notes.delete_all();
+            }
+            TrackAction::DraggedNotes { drag, scale, conflicts: _ } => {
+                let mut modified_notes: MidiNotes = track.selected.notes.clone();
 
-                    for v in modified_notes.notes.iter_mut() {
-                        for note in v.iter_mut() {
-                            note.reposition(drag.delta_pitch, drag.delta_time, &scale);
-                        }
-                    }
-
-                    track.selected.notes.clear();
-                    track.selected.notes.add_midi_notes(&modified_notes);
-                }
-                TrackAction::ResizedNotes { delta_time, resize_end, .. } => {
-                    for notes_in_pitch in track.selected.notes.notes.iter_mut() {
-                        for note in notes_in_pitch.iter_mut() {
-                            note.resize(resize_end, delta_time);
-                        }
+                for v in modified_notes.notes.iter_mut() {
+                    for note in v.iter_mut() {
+                        note.reposition(drag.delta_pitch, drag.delta_time, &scale);
                     }
                 }
-                TrackAction::SelectionAction(selection_action) => match selection_action {
-                    SelectionAction::DrainSelect { .. } => {
-                        track.selected.notes.drain(&mut track.midi_notes);
-                    }
-                    SelectionAction::UnselectOne { note_index, .. } => {
-                        let note = track.selected.notes.remove(&note_index);
-                        track.midi_notes.add(&note);
-                    }
-                    // SelectionAction::DeselectManyNotes { note_indices, new_indices } => {}
-                    SelectionAction::UnselectAllButOne { note_index, .. } => {
-                        let selected_note = track.selected.notes.remove(&note_index);
-                        track.selected.notes.drain(&mut track.midi_notes);
-                        track.selected.notes.add(&selected_note);
-                    }
 
-                    SelectionAction::SelectAllNotes { .. } => {
-                        track.midi_notes.drain(&mut track.selected.notes);
+                track.selected.notes.clear();
+                track.selected.notes.add_midi_notes(&modified_notes);
+            }
+            TrackAction::ResizedNotes { delta_time, resize_end, .. } => {
+                for notes_in_pitch in track.selected.notes.notes.iter_mut() {
+                    for note in notes_in_pitch.iter_mut() {
+                        note.resize(*resize_end, *delta_time);
                     }
-                    SelectionAction::AddOneToSelected { note_index, .. } => {
-                        let note = track.midi_notes.remove(&note_index);
-                        track.selected.notes.add(&note);
-                    }
-                    SelectionAction::SelectOne { note_index, .. } => {
-                        let selected_note = track.midi_notes.remove(&note_index);
-                        track.selected.notes.drain(&mut track.midi_notes);
-                        track.selected.notes.add(&selected_note);
-                    }
+                }
+            }
+            TrackAction::SelectionAction(selection_action) => match selection_action {
+                SelectionAction::DrainSelect { .. } => {
+                    track.selected.notes.drain(&mut track.midi_notes);
+                }
+                SelectionAction::UnselectOne { note_index, .. } => {
+                    let note = track.selected.notes.remove(&note_index);
+                    track.midi_notes.add(&note);
+                }
+                // SelectionAction::DeselectManyNotes { note_indices, new_indices } => {}
+                SelectionAction::UnselectAllButOne { note_index, .. } => {
+                    let selected_note = track.selected.notes.remove(&note_index);
+                    track.selected.notes.drain(&mut track.midi_notes);
+                    track.selected.notes.add(&selected_note);
+                }
 
-                    SelectionAction::SelectManyNotes { note_indices, .. } => {
-                        let removed_notes = track.midi_notes.remove_notes(&note_indices.clone());
-                        track.selected.notes.add_midi_notes(&removed_notes);
-                    }
-                },
-            };
-        }
+                SelectionAction::SelectAllNotes { .. } => {
+                    track.midi_notes.drain(&mut track.selected.notes);
+                }
+                SelectionAction::AddOneToSelected { note_index, .. } => {
+                    let note = track.midi_notes.remove(&note_index);
+                    track.selected.notes.add(&note);
+                }
+                SelectionAction::SelectOne { note_index, .. } => {
+                    let selected_note = track.midi_notes.remove(&note_index);
+                    track.selected.notes.drain(&mut track.midi_notes);
+                    track.selected.notes.add(&selected_note);
+                }
+
+                SelectionAction::SelectManyNotes { note_indices, .. } => {
+                    let removed_notes = track.midi_notes.remove_notes(&note_indices.clone());
+                    track.selected.notes.add_midi_notes(&removed_notes);
+                }
+            },
+        };
     }
 }
+// }

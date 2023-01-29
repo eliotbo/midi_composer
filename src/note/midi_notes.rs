@@ -165,6 +165,7 @@ impl MidiNotes {
 
     pub fn keep_one(&mut self, note_index: NoteIndex) {
         *self = Self::from(vec![self.notes[note_index.pitch_index][note_index.time_index].clone()]);
+        self.number_of_notes = 1;
     }
 
     // TODO: resolve the timing conflicts when two notes overlap
@@ -281,6 +282,7 @@ impl MidiNotes {
         let conflicts = self.resolve_conflicts_single(&note);
         let time_index = self.find_time_index(note);
         let pitch = note.pitch.get() as usize;
+        self.number_of_notes += 1;
 
         let added_note = AddedNote {
             note_index_after: NoteIndex { pitch_index: pitch, time_index: time_index as usize },
@@ -334,7 +336,7 @@ impl MidiNotes {
 
     // resolves overlapping notes between midi_notes and selected.notes.
     // The selected notes have priority since they are the ones that are being edited.
-    pub fn resolve_conflicts(&mut self, notes: &MidiNotes) {
+    pub fn resolve_conflicts(&mut self, notes: &MidiNotes) -> ConflictHistory {
         let mut all_conflicts = ConflictHistory::default();
         for pitch_vec in notes.notes.iter() {
             for note in pitch_vec.iter() {
@@ -342,6 +344,7 @@ impl MidiNotes {
                 all_conflicts.add(local_conflict);
             }
         }
+        all_conflicts
     }
 
     // find the time_index of an external note using binary search
@@ -385,7 +388,7 @@ impl MidiNotes {
         if time_index > 0 {
             let curr = &mut self.notes[pitch][time_index - 1];
             if note.start < curr.end {
-                let delta_time = curr.end - note.start;
+                let delta_time = note.start - curr.end;
                 resized_notes.push(ResizedConflicts {
                     note_index: NoteIndex {
                         pitch_index: pitch,
@@ -743,35 +746,11 @@ impl MidiNotes {
     }
 
     // TODO: optimize this.
-    pub fn resize_all_notes(&mut self, resize_end: NoteEdge, mut delta_time: f32) -> f32 {
-        // more efficient with for loop with a continue on empty vecs
-        let mut note_with_minimum_start = self
-            .notes
-            .iter()
-            .flatten()
-            .min_by(|a, b| a.start.partial_cmp(&b.start).unwrap())
-            .unwrap()
-            .clone();
-
-        let backup_min_start_note = note_with_minimum_start.clone();
-
-        note_with_minimum_start.resize(resize_end, delta_time);
-
-        if let NoteEdge::Start = resize_end {
-            delta_time = note_with_minimum_start.start - backup_min_start_note.start;
-        } else {
-            delta_time = note_with_minimum_start.end - backup_min_start_note.end;
-        }
-
-        // if the minimum start is moved below 1.0 (the start beat of the grid),
-        // then block it there
-        if note_with_minimum_start.start < 1.0 {
-            // overide_delta_time = true;
-            delta_time = 1.0 - backup_min_start_note.start;
-        }
-
+    pub fn resize_all_notes(&mut self, resize_end: NoteEdge, delta_time: f32) -> f32 {
+        //
         for notes_in_pitch in self.notes.iter_mut() {
             for note in notes_in_pitch.iter_mut() {
+                //
                 // apply transformation to all notes
                 note.resize(resize_end, delta_time);
             }
@@ -1023,31 +1002,17 @@ impl MidiNote {
         match resize_end {
             NoteEdge::Start => {
                 new_start_time = self.start + delta_time;
-
-                // // cannot start later than end
-                // if new_start_time > new_end_time {
-                //     new_start_time = new_end_time;
-                // }
-
-                // // cannot start before beat 1
-                // if new_start_time < 1.0 {
-                //     new_start_time = 1.0;
-                // }
             }
             NoteEdge::End => {
                 new_end_time = self.end + delta_time;
-
-                // cannot end before start
-                if new_end_time < new_start_time {
-                    new_end_time = new_start_time;
-                }
             }
             _ => {}
         }
 
-        *self = MidiNote::new(new_start_time, new_end_time, self.pitch);
+        let start_time = new_start_time.min(new_end_time).max(1.0);
+        let end_time = new_start_time.max(new_end_time);
 
-        // println!("original_notes: {:?}", original_note
+        *self = MidiNote::new(start_time, end_time, self.pitch);
     }
 
     pub fn to_label(&self) -> String {

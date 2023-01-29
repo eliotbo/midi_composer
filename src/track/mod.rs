@@ -149,7 +149,7 @@ impl Track {
             TrackMessage::UpdateSelection { change_selection } => {
                 match change_selection {
                     ChangeSelection::DrainSelect => {
-                        println!("no note clicked: {}", self.selected.notes.number_of_notes);
+                        println!("nbr note selected: {}", self.selected.notes.number_of_notes);
                         if !(self.selected.notes.number_of_notes == 0) {
                             println!("Drain Select");
                             let added_notes = self.selected.notes.drain(&mut self.midi_notes);
@@ -265,7 +265,14 @@ impl Track {
 
             TrackMessage::FinishDragging { drag, scale } => {
                 history.add_action_from_track(self.track_id);
-                self.track_history.add_track_action(TrackAction::DraggedNotes { drag, scale });
+
+                let conflicts = self.midi_notes.resolve_conflicts(&self.selected.notes);
+
+                self.track_history.add_track_action(TrackAction::DraggedNotes {
+                    drag,
+                    scale,
+                    conflicts,
+                });
             }
 
             TrackMessage::ResizedNotes { mut original_notes, delta_time, resize_end } => {
@@ -280,10 +287,13 @@ impl Track {
             TrackMessage::FinishResizingNote { delta_time, resize_end } => {
                 history.add_action_from_track(self.track_id);
                 let resized_conflicts = self.selected.notes.resolve_self_resize_conflicts();
+                let conflicts = self.midi_notes.resolve_conflicts(&self.selected.notes);
+
                 self.track_history.add_track_action(TrackAction::ResizedNotes {
                     delta_time,
                     resize_end,
                     resized_conflicts,
+                    conflicts,
                 });
             }
 
@@ -634,6 +644,7 @@ impl canvas::Program<TrackMessage, PianoTheme> for Track {
 
                 // if the control key is not pressed, clear the Selected notes
                 if !self.modifiers.control() {
+                    println!("clearing selection");
                     return (
                         event::Status::Captured,
                         Some(TrackMessage::UpdateSelection {

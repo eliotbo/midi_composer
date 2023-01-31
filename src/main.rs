@@ -47,9 +47,6 @@ use std::collections::HashMap;
 
 // TODO: contour on notes
 
-// TODO: bug when adding with conflict and then undoing: original note length is not restored
-// It's due to the definition of delta_tim in resolve_conflicts_single()
-
 pub fn main() -> iced::Result {
     // env_logger::builder().format_timestamp(None).init();
 
@@ -79,6 +76,9 @@ impl Default for MidiEditor {
 
         let track0 = tracks.get_mut(&0).unwrap();
         track0.is_active = true;
+        // let mut history = History::default();
+        // println!("history.is_dummy: {}", history.is_dummy);
+        // history.is_dummy = false;
 
         Self {
             history: History::default(),
@@ -174,7 +174,7 @@ impl Application for MidiEditor {
         match message {
             EditorMessage::Track(track_id, message) => {
                 if let Some(track) = self.tracks.get_mut(&track_id) {
-                    track.update(message, &mut self.history);
+                    track.update(&message, &mut self.history);
                 } else {
                     println!("Called non-existent track id: {}", track_id);
                 }

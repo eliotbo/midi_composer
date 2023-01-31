@@ -1,16 +1,24 @@
 use crate::note::midi_notes::{MidiNote, MidiNotes, NoteEdge, NoteIndex};
 // use crate::track::undoredo::{AddedNote, ResizedConflicts, TrackHistory};
-use crate::track::Track;
+use crate::track::{AddMode, Track, TrackMessage};
+use crate::util::History;
 
+use std::fmt;
 // use crate::note::midi_notes::{MidiNote, MidiNotes, NoteEdge, NoteIndex};
 // use crate::track::actions::{SelectionAction, TrackAction};
 // use crate::track::Track;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct TrackHistory {
     pub action_sequence: Vec<TrackAction>,
     pub head_position: usize,
     pub current_size: usize,
+}
+
+impl fmt::Debug for TrackHistory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "TrackHistory: {:#?}", self.action_sequence)
+    }
 }
 
 impl TrackHistory {
@@ -25,9 +33,11 @@ impl TrackHistory {
 
     pub fn redo(&mut self) -> Option<TrackAction> {
         let action = self.action_sequence.get(self.head_position).cloned();
-        if self.head_position <= self.action_sequence.len() {
+        // println!("track history: {:?}", self);
+        if self.head_position < self.action_sequence.len() {
             self.head_position += 1;
         } else {
+            // println!("head position: {}", self.head_position);
             return None;
         }
         action
@@ -76,7 +86,7 @@ pub struct DeletedNote {
 pub struct AddedNote {
     pub note_index_after: NoteIndex,
     pub note_to_add: MidiNote,
-    pub conflicts: ConflictHistory,
+    pub conflicts_with_selected: ConflictHistory,
     // pub resized_notes: Vec<ResizedConflicts>,
     // pub removed_notes: Vec<DeletedNote>,
 }
@@ -86,19 +96,16 @@ pub struct AddedNote {
 pub enum TrackAction {
     AddNote {
         added_note: AddedNote,
-        // note_index_after: NoteIndex,
-        // note_to_add: MidiNote,
-        // resized_notes: Vec<ResizedNote>,
-        // removed_notes: Vec<DeletedNote>,
+        conflicts: ConflictHistory,
+        message: TrackMessage,
     },
     AddManyNotes {
         added_notes: Vec<AddedNote>,
-        // note_indices_after: Vec<NoteIndex>,
-        // notes_to_add: MidiNotes,
     },
     RemoveNote {
         note_index_before: NoteIndex,
         note_before: MidiNote,
+        is_selected: bool,
     },
     RemoveSelectedNotes {
         deleted_notes: MidiNotes,
@@ -156,7 +163,7 @@ pub enum SelectionAction {
 }
 
 impl TrackAction {
-    fn handle_conflicts(track: &mut Track, conflicts: &ConflictHistory) {
+    pub fn handle_conflicts(track: &mut Track, conflicts: &ConflictHistory) {
         for removed_note in conflicts.deleted.iter() {
             track.midi_notes.add(&removed_note.removed_note);
         }
@@ -169,27 +176,47 @@ impl TrackAction {
         }
     }
 
+    pub fn handle_selection_conflicts(track: &mut Track, conflicts: &ConflictHistory) {
+        for removed_note in conflicts.deleted.iter() {
+            track.selected.notes.remove(&removed_note.note_index);
+        }
+
+        for resized_note in conflicts.resized.iter() {
+            let note_index = resized_note.note_index;
+            let note =
+                &mut track.selected.notes.notes[note_index.pitch_index][note_index.time_index];
+
+            note.resize(resized_note.edge, -resized_note.delta_time);
+        }
+    }
+
     pub fn handle_undo(&self, track: &mut Track) {
         match self {
-            TrackAction::AddNote { added_note } => {
-                track.midi_notes.remove(&added_note.note_index_after);
-
-                Self::handle_conflicts(track, &added_note.conflicts);
+            TrackAction::AddNote { added_note, conflicts, .. } => {
+                track.selected.notes.remove(&added_note.note_index_after);
+                Self::handle_selection_conflicts(track, &added_note.conflicts_with_selected);
+                Self::handle_conflicts(track, &conflicts);
 
                 track.notes_cache.clear();
+                track.selected_notes_cache.clear();
             }
+
             TrackAction::AddManyNotes { added_notes } => {
-                let note_indices_after = added_notes
-                    .iter()
-                    .map(|added_note| added_note.note_index_after)
-                    .collect::<Vec<_>>();
-                track.midi_notes.remove_notes(&note_indices_after);
+                track.remove_notes_with_conflicts(added_notes);
                 track.notes_cache.clear();
             }
-            TrackAction::RemoveNote { note_before, .. } => {
-                track.midi_notes.add(note_before);
-                track.notes_cache.clear();
+
+            TrackAction::RemoveNote { note_before, is_selected, .. } => {
+                if !is_selected {
+                    track.midi_notes.add(note_before);
+                    track.notes_cache.clear();
+                } else {
+                    // println!("undo remove note (selected) ");
+                    track.selected.notes.add(note_before);
+                    track.selected_notes_cache.clear();
+                }
             }
+
             TrackAction::RemoveSelectedNotes { deleted_notes, .. } => {
                 track.selected.notes.add_midi_notes(deleted_notes);
                 track.selected_notes_cache.clear();
@@ -239,6 +266,7 @@ impl TrackAction {
                 track.notes_cache.clear();
                 match selection_action {
                     SelectionAction::DrainSelect { new_indices } => {
+                        println!("undo drain select");
                         let notes = track.midi_notes.remove_notes(new_indices);
                         track.selected.notes.add_midi_notes(&notes);
                     }
@@ -277,13 +305,15 @@ impl TrackAction {
     }
 
     pub fn handle_redo(&self, track: &mut Track) {
-        // if let Some(track_action) = track.track_history.redo() {
+        //
+        // a redo action should not be recorded in the history. so
+        // we pass a dummy history to the update function
+        let mut dummy_history = &mut History::default();
+        dummy_history.is_dummy = true;
         track.notes_cache.clear();
         track.selected_notes_cache.clear();
         match self {
-            TrackAction::AddNote { added_note, .. } => {
-                track.midi_notes.add(&added_note.note_to_add);
-            }
+            TrackAction::AddNote { message, .. } => track.update(message, dummy_history),
             TrackAction::AddManyNotes { added_notes } => {
                 let notes_to_add = added_notes
                     .iter()
@@ -292,10 +322,14 @@ impl TrackAction {
                     .collect::<Vec<_>>()
                     .into();
 
-                track.midi_notes.add_midi_notes(&notes_to_add);
+                track.selected.notes.add_midi_notes(&notes_to_add);
             }
-            TrackAction::RemoveNote { note_index_before, .. } => {
-                track.midi_notes.remove(&note_index_before);
+            TrackAction::RemoveNote { note_index_before, is_selected, .. } => {
+                if *is_selected {
+                    track.selected.notes.remove(&note_index_before);
+                } else {
+                    track.midi_notes.remove(&note_index_before);
+                }
             }
             TrackAction::RemoveSelectedNotes { .. } => {
                 track.selected.notes.delete_all();

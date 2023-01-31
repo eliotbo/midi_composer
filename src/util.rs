@@ -11,6 +11,7 @@ pub struct History {
     pub action_sequence: Vec<Action>,
     pub head_position: usize,
     pub current_size: usize,
+    pub is_dummy: bool,
 }
 
 impl History {
@@ -29,6 +30,7 @@ impl History {
         if self.head_position < self.action_sequence.len() {
             self.head_position += 1;
         } else {
+            println!("head position: {}", self.head_position);
             return None;
         }
         action

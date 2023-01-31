@@ -14,7 +14,8 @@ use iced::{
 
 use crate::grid::{Grid, GridInteraction};
 use crate::note::midi_notes::{
-    ChangeSelection, MidiNote, MidiNotes, NoteEdge, NoteInteraction, OverNote, Pitch, Selected,
+    ChangeSelection, MidiNote, MidiNotes, NoteEdge, NoteIndex, NoteInteraction, OverNote, Pitch,
+    Selected, WritingMode,
 };
 use crate::note::scale::{Scale, ScaleType};
 use crate::piano_theme::PianoTheme;
@@ -52,6 +53,8 @@ pub struct Track {
     pub last_cursor_delta: Vector,
     pub last_delta_time: f32,
     pub drag: Drag,
+    pub ready_up_note_writing: bool,
+    pub has_added_note: bool,
     track_history: TrackHistory,
 }
 
@@ -97,6 +100,8 @@ impl Track {
             last_delta_time: 0.0,
             drag: Drag::default(),
             track_history: TrackHistory::default(),
+            ready_up_note_writing: false,
+            has_added_note: true,
         }
     }
 
@@ -104,10 +109,71 @@ impl Track {
         Canvas::new(self).width(Length::Fill).height(Length::Fill).into()
     }
 
-    pub fn update(&mut self, message: TrackMessage, history: &mut History) {
+    pub fn remove_notes_with_conflicts(
+        &mut self,
+        added_notes: &Vec<crate::track::actions::AddedNote>,
+    ) -> MidiNotes {
+        let added_notes2 = &mut added_notes.clone();
+        added_notes2
+            .sort_by(|a, b| b.note_index_after.time_index.cmp(&a.note_index_after.time_index));
+        added_notes2.reverse();
+
+        let mut removed_notes: MidiNotes = MidiNotes::new();
+        for crate::track::actions::AddedNote {
+            note_index_after: NoteIndex { pitch_index, time_index },
+            conflicts_with_selected: conflicts,
+            ..
+        } in added_notes2.iter()
+        {
+            crate::track::actions::TrackAction::handle_conflicts(self, &conflicts);
+
+            let note = self.selected.notes.notes[*pitch_index].remove(*time_index);
+            removed_notes.add(&note);
+        }
+        removed_notes
+    }
+
+    pub fn add_note(&mut self, message: &TrackMessage, history: &mut History) {
+        if let TrackMessage::AddNote { note, add_mode } = message {
+            if let AddMode::Drain = add_mode {
+                self.update(
+                    &TrackMessage::UpdateSelection {
+                        change_selection: ChangeSelection::DrainSelect,
+                    },
+                    history,
+                );
+            }
+
+            let conflicts = self.midi_notes.resolve_conflicts_single(&note);
+            self.selected_notes_cache.clear();
+            self.notes_cache.clear();
+
+            let added_note = self.selected.notes.add(&note);
+
+            if !added_note.conflicts_with_selected.deleted.is_empty() {
+                println!(
+                    "deleted selected notes: {:?}",
+                    added_note.conflicts_with_selected.deleted
+                );
+            }
+
+            // println!("added note: {:?}", added_note);
+            if !history.is_dummy {
+                history.add_action_from_track(self.track_id);
+                self.track_history.add_track_action(TrackAction::AddNote {
+                    added_note,
+                    conflicts,
+                    message: message.clone(),
+                });
+            }
+        }
+    }
+
+    pub fn update(&mut self, message: &TrackMessage, history: &mut History) {
+        let message = message.clone();
         match message {
             TrackMessage::Toggle => {
-                println!("Toggled");
+                // println!("Toggled");
                 match self.grid.scale.scale_type {
                     ScaleType::Chromatic => self.grid.scale.set_scale_type(ScaleType::Minor),
                     ScaleType::Minor => self.grid.scale.set_scale_type(ScaleType::Chromatic),
@@ -156,8 +222,10 @@ impl Track {
                             let new_indices =
                                 added_notes.iter().map(|x| x.note_index_after).collect();
 
-                            self.track_history
-                                .add_selection(SelectionAction::DrainSelect { new_indices });
+                            if !history.is_dummy {
+                                self.track_history
+                                    .add_selection(SelectionAction::DrainSelect { new_indices });
+                            }
                         }
                     }
                     ChangeSelection::UnselectOne { note_index } => {
@@ -165,10 +233,12 @@ impl Track {
                         let note = self.selected.notes.remove(&note_index);
                         let added_note = self.midi_notes.add(&note);
 
-                        self.track_history.add_selection(SelectionAction::UnselectOne {
-                            note_index,
-                            new_index: added_note.note_index_after,
-                        });
+                        if !history.is_dummy {
+                            self.track_history.add_selection(SelectionAction::UnselectOne {
+                                note_index,
+                                new_index: added_note.note_index_after,
+                            });
+                        }
                     }
                     ChangeSelection::UnselectAllButOne { note_index } => {
                         println!("Unselect All But One");
@@ -179,11 +249,13 @@ impl Track {
                         let added_note = self.selected.notes.add(&selected_note);
                         // let new_note_index = ;
 
-                        self.track_history.add_selection(SelectionAction::UnselectAllButOne {
-                            note_index,
-                            new_indices,
-                            new_note_index: added_note.note_index_after,
-                        });
+                        if !history.is_dummy {
+                            self.track_history.add_selection(SelectionAction::UnselectAllButOne {
+                                note_index,
+                                new_indices,
+                                new_note_index: added_note.note_index_after,
+                            });
+                        }
                     }
 
                     ChangeSelection::SelectAll => {
@@ -191,19 +263,21 @@ impl Track {
                         let drained_notes = self.midi_notes.drain(&mut self.selected.notes);
                         let new_indices =
                             drained_notes.iter().map(|x| x.note_index_after).collect();
-
-                        self.track_history
-                            .add_selection(SelectionAction::SelectAllNotes { new_indices });
+                        if !history.is_dummy {
+                            self.track_history
+                                .add_selection(SelectionAction::SelectAllNotes { new_indices });
+                        }
                     }
                     ChangeSelection::AddOneToSelected { note_index } => {
                         println!("Add One To Selected");
                         let note = self.midi_notes.remove(&note_index);
                         let added_note = self.selected.notes.add(&note);
-
-                        self.track_history.add_selection(SelectionAction::AddOneToSelected {
-                            note_index,
-                            new_index: added_note.note_index_after,
-                        });
+                        if !history.is_dummy {
+                            self.track_history.add_selection(SelectionAction::AddOneToSelected {
+                                note_index,
+                                new_index: added_note.note_index_after,
+                            });
+                        }
                     }
 
                     ChangeSelection::SelectOne { note_index } => {
@@ -213,11 +287,13 @@ impl Track {
                         let new_indices = added_notes.iter().map(|x| x.note_index_after).collect();
                         let added_note = self.selected.notes.add(&selected_note);
 
-                        self.track_history.add_selection(SelectionAction::SelectOne {
-                            note_index,
-                            new_indices,
-                            new_note_index: added_note.note_index_after,
-                        });
+                        if !history.is_dummy {
+                            self.track_history.add_selection(SelectionAction::SelectOne {
+                                note_index,
+                                new_indices,
+                                new_note_index: added_note.note_index_after,
+                            });
+                        }
                     }
 
                     ChangeSelection::SelectMany { note_indices } => {
@@ -232,11 +308,11 @@ impl Track {
                                 "number of selected notes: {}",
                                 self.selected.notes.number_of_notes
                             );
-
-                            self.track_history.add_selection(SelectionAction::SelectManyNotes {
-                                note_indices,
-                                new_indices,
-                            });
+                            if !history.is_dummy {
+                                self.track_history.add_selection(
+                                    SelectionAction::SelectManyNotes { note_indices, new_indices },
+                                );
+                            }
                         }
                     }
                 };
@@ -264,15 +340,16 @@ impl Track {
             }
 
             TrackMessage::FinishDragging { drag, scale } => {
-                history.add_action_from_track(self.track_id);
-
                 let conflicts = self.midi_notes.resolve_conflicts(&self.selected.notes);
 
-                self.track_history.add_track_action(TrackAction::DraggedNotes {
-                    drag,
-                    scale,
-                    conflicts,
-                });
+                if !history.is_dummy {
+                    history.add_action_from_track(self.track_id);
+                    self.track_history.add_track_action(TrackAction::DraggedNotes {
+                        drag,
+                        scale,
+                        conflicts,
+                    });
+                }
             }
 
             TrackMessage::ResizedNotes { mut original_notes, delta_time, resize_end } => {
@@ -285,16 +362,18 @@ impl Track {
             }
 
             TrackMessage::FinishResizingNote { delta_time, resize_end } => {
-                history.add_action_from_track(self.track_id);
                 let resized_conflicts = self.selected.notes.resolve_self_resize_conflicts();
                 let conflicts = self.midi_notes.resolve_conflicts(&self.selected.notes);
 
-                self.track_history.add_track_action(TrackAction::ResizedNotes {
-                    delta_time,
-                    resize_end,
-                    resized_conflicts,
-                    conflicts,
-                });
+                if !history.is_dummy {
+                    history.add_action_from_track(self.track_id);
+                    self.track_history.add_track_action(TrackAction::ResizedNotes {
+                        delta_time,
+                        resize_end,
+                        resized_conflicts,
+                        conflicts,
+                    });
+                }
             }
 
             TrackMessage::Selecting { selecting_square, direct_selecting_square } => {
@@ -310,31 +389,61 @@ impl Track {
                 self.notes_cache.clear();
                 self.selected_notes_cache.clear();
 
-                history.add_action_from_track(self.track_id);
-                self.track_history
-                    .add_track_action(TrackAction::RemoveSelectedNotes { deleted_notes });
+                if !history.is_dummy {
+                    history.add_action_from_track(self.track_id);
+                    self.track_history
+                        .add_track_action(TrackAction::RemoveSelectedNotes { deleted_notes });
+                }
             }
 
-            TrackMessage::AddNote(note_to_add) => {
-                let added_note = self.midi_notes.add(&note_to_add);
-                self.notes_cache.clear();
+            TrackMessage::ReadyUpNoteWriting => {
+                self.ready_up_note_writing = true;
+                self.has_added_note = false;
+            }
 
-                history.add_action_from_track(self.track_id);
-                self.track_history.add_track_action(TrackAction::AddNote { added_note });
+            m @ TrackMessage::AddNote { .. } => {
+                self.has_added_note = true;
+                self.add_note(&m, history);
+            }
+
+            TrackMessage::DeleteOne { note_index_before, is_selected } => {
+                let note_before = if !is_selected {
+                    self.update(
+                        &TrackMessage::UpdateSelection {
+                            change_selection: ChangeSelection::DrainSelect,
+                        },
+                        history,
+                    );
+                    self.midi_notes.remove(&note_index_before)
+                } else {
+                    self.selected.notes.remove(&note_index_before)
+                };
+                self.notes_cache.clear();
+                self.selected_notes_cache.clear();
+
+                if !history.is_dummy {
+                    history.add_action_from_track(self.track_id);
+                    self.track_history.add_track_action(TrackAction::RemoveNote {
+                        note_index_before,
+                        note_before,
+                        is_selected,
+                    });
+                }
             }
 
             TrackMessage::AddManyNotes(notes_to_add) => {
-                let added_notes = self.midi_notes.add_midi_notes(&notes_to_add);
-                self.notes_cache.clear();
-
-                history.add_action_from_track(self.track_id);
-                self.track_history.add_track_action(TrackAction::AddManyNotes { added_notes });
+                let added_notes = self.selected.notes.add_midi_notes(&notes_to_add);
+                self.selected_notes_cache.clear();
+                if !history.is_dummy {
+                    history.add_action_from_track(self.track_id);
+                    self.track_history.add_track_action(TrackAction::AddManyNotes { added_notes });
+                }
             }
 
             // TODO: mechanism for getting out of the loop in case of an unexpected state of History
             TrackMessage::Undo => loop {
                 if let Some(track_action) = self.track_history.undo() {
-                    println!("Undoing track action: {:?}", track_action);
+                    // println!("Undoing track action: {:?}", track_action);
                     track_action.handle_undo(self);
 
                     match track_action {
@@ -348,7 +457,7 @@ impl Track {
 
             TrackMessage::Redo => loop {
                 if let Some(track_action) = self.track_history.redo() {
-                    println!("Redoing track action: {:?}", track_action);
+                    // println!("Redoing track action: {:?}", track_action);
                     track_action.handle_redo(self);
 
                     match track_action {
@@ -363,14 +472,22 @@ impl Track {
     }
 }
 
+#[derive(Clone, Debug, Copy)]
+pub enum AddMode {
+    Drain,
+    Custom,
+    Normal,
+}
+
 #[derive(Clone, Debug)]
 pub enum TrackMessage {
     Translated(Vector),
     Scaled(Vector, Option<Vector>),
-    AddNote(MidiNote),
+    AddNote { note: MidiNote, add_mode: AddMode }, // bool: first_note_of_write_mode
     AddManyNotes(MidiNotes),
     CursorMoved,
     DeleteSelectedNotes,
+    DeleteOne { note_index_before: NoteIndex, is_selected: bool },
     UpdateSelection { change_selection: ChangeSelection },
     Dragged { cursor_delta: Vector, original_notes: MidiNotes },
     FinishDragging { drag: Drag, scale: Scale },
@@ -385,6 +502,7 @@ pub enum TrackMessage {
     // },
     ModifiersChanged(Modifiers),
     Toggle,
+    ReadyUpNoteWriting,
     Undo,
     Redo,
 }
@@ -453,7 +571,7 @@ impl canvas::Program<TrackMessage, PianoTheme> for Track {
         }
 
         // let region = self.grid.visible_region(bounds.size());
-        // TODO: uncomment
+
         let projected_cursor = self.grid.to_track_axes(cursor_position, &bounds.size());
         // BUG:  when cursor is out of bounds
         let music_scale_cursor = self.grid.adjust_to_music_scale(projected_cursor);
@@ -461,6 +579,21 @@ impl canvas::Program<TrackMessage, PianoTheme> for Track {
         match event {
             Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) => {
                 (event::Status::Captured, Some(TrackMessage::ModifiersChanged(modifiers)))
+            }
+
+            // DEbug
+            Event::Keyboard(keyboard::Event::KeyPressed {
+                key_code: keyboard::KeyCode::D, ..
+            }) => {
+                println!("");
+                println!("");
+                println!("len : {}", self.track_history.action_sequence.len());
+                for act in &self.track_history.action_sequence {
+                    println!("------------------");
+                    println!("{:#?}", act);
+                }
+                // println!("{:#?}", self.track_history.action_sequence);
+                (event::Status::Captured, None)
             }
 
             Event::Keyboard(keyboard::Event::KeyPressed {
@@ -539,8 +672,9 @@ impl canvas::Program<TrackMessage, PianoTheme> for Track {
                             Some(TrackMessage::FinishResizingNote { delta_time, resize_end }),
                         );
                     }
-                    NoteInteraction::WriteNoteMode { .. } => {
-                        track_state.note_interaction = NoteInteraction::WriteNoteMode(false);
+                    NoteInteraction::Writing { .. } => {
+                        track_state.note_interaction =
+                            NoteInteraction::Writing { writing_mode: WritingMode::None };
                     }
 
                     _ => {
@@ -564,23 +698,11 @@ impl canvas::Program<TrackMessage, PianoTheme> for Track {
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 //
 
-                // draw a note if in pen mode and not over a note
+                // write or delete a note if in pen mode
                 if track_state.note_interaction.is_write_mode() {
-                    track_state.note_interaction = NoteInteraction::WriteNoteMode(true);
-                    // if let Some(OverNote { .. }) =
-                    //     self.midi_notes.get_note_under_cursor(&self.grid, music_scale_cursor)
-                    // {
-                    //     return (event::Status::Ignored, None);
-                    // }
-
-                    // let pitch = Pitch(music_scale_cursor.y.floor() as i16);
-                    // let start = music_scale_cursor.x.floor();
-                    // let end = start + 1.0;
-
-                    // let note = MidiNote::new(start, end, pitch);
-
-                    // return (event::Status::Captured, Some(TrackMessage::AddNote(note)));
-                    return (event::Status::Captured, None);
+                    return track_state
+                        .note_interaction
+                        .init_note_writing(music_scale_cursor, &self);
                 }
 
                 // Check if a Selected note has been clicked
@@ -620,6 +742,7 @@ impl canvas::Program<TrackMessage, PianoTheme> for Track {
                     } else {
                         // if the control key is not pressed, clear the Selected notes and
                         // select the clicked note
+                        //
                         new_selected.clear();
                         new_selected.add(&note);
 
@@ -693,7 +816,7 @@ impl canvas::Program<TrackMessage, PianoTheme> for Track {
                     );
                 };
 
-                match &track_state.note_interaction {
+                match &mut track_state.note_interaction {
                     inter @ NoteInteraction::Resizing { .. } => {
                         return inter.handle_resizing(music_scale_cursor, self);
                     }
@@ -703,13 +826,15 @@ impl canvas::Program<TrackMessage, PianoTheme> for Track {
                     inter @ NoteInteraction::Dragging { .. } => {
                         return inter.handle_dragging(projected_cursor, self);
                     }
-                    inter @ NoteInteraction::WriteNoteMode(_) => {
-                        return inter.handle_note_writing(music_scale_cursor, &self);
+                    NoteInteraction::Writing { writing_mode } => {
+                        // TODO TODO
+
+                        return writing_mode.handle_note_writing(music_scale_cursor, &self);
                     }
                     _ => {}
                 };
 
-                if let NoteInteraction::WriteNoteMode(_do_write) = track_state.note_interaction {
+                if let NoteInteraction::Writing { .. } = track_state.note_interaction {
                     return (event::Status::Ignored, None);
 
                     // no mouse interaction yet
@@ -802,11 +927,18 @@ impl canvas::Program<TrackMessage, PianoTheme> for Track {
         let background = self.grid.draw_background(bounds, &self.grid_cache);
         let text_overlay = self.grid.draw_text_and_hover_overlay(bounds, cursor);
 
-        let yellow = Color::from_rgb(1.0, 1.0, 0.0);
-        let dark_yellow = Color::from_rgb(0.5, 0.5, 0.0);
+        let trans = 0.25;
+        let yellow = Color::from_rgba(1.0, 1.0, 0.0, trans);
+        let dark_yellow = Color::from_rgba(0.5, 0.5, 0.0, trans);
 
-        let notes_overlay =
-            self.midi_notes.draw_notes(&self.grid, &bounds, &cursor, &self.notes_cache, yellow);
+        let notes_overlay = self.midi_notes.draw_notes(
+            &self.grid,
+            &bounds,
+            &cursor,
+            &self.notes_cache,
+            yellow,
+            trans,
+        );
 
         let selected_notes_elements = self.selected.notes.draw_notes(
             &self.grid,
@@ -814,6 +946,7 @@ impl canvas::Program<TrackMessage, PianoTheme> for Track {
             &cursor,
             &self.selected_notes_cache,
             dark_yellow,
+            trans,
         );
 
         let selecting_box =
@@ -835,7 +968,7 @@ impl canvas::Program<TrackMessage, PianoTheme> for Track {
             NoteInteraction::Resizing { .. } | NoteInteraction::ResizingHover => {
                 mouse::Interaction::ResizingHorizontally
             }
-            NoteInteraction::WriteNoteMode(_) => mouse::Interaction::Crosshair,
+            NoteInteraction::Writing { .. } => mouse::Interaction::Crosshair,
 
             _ => mouse::Interaction::default(),
         }

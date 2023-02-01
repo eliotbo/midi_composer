@@ -1,4 +1,4 @@
-use crate::note::midi_notes::{MidiNote, MidiNotes, NoteEdge, NoteIndex};
+use crate::note::midi_notes::{ChangeSelection, MidiNote, MidiNotes, NoteEdge, NoteIndex};
 // use crate::track::undoredo::{AddedNote, ResizedConflicts, TrackHistory};
 use crate::track::{AddMode, Track, TrackMessage};
 use crate::util::History;
@@ -101,25 +101,30 @@ pub enum TrackAction {
     },
     AddManyNotes {
         added_notes: Vec<AddedNote>,
+        message: TrackMessage,
     },
     RemoveNote {
         note_index_before: NoteIndex,
         note_before: MidiNote,
         is_selected: bool,
+        message: TrackMessage,
     },
     RemoveSelectedNotes {
         deleted_notes: MidiNotes,
+        message: TrackMessage,
     },
     DraggedNotes {
-        drag: crate::track::Drag,
-        scale: crate::note::scale::Scale,
+        // drag: crate::track::Drag,
+        // scale: crate::note::scale::Scale,
         conflicts: ConflictHistory,
+        message: TrackMessage,
     },
     ResizedNotes {
-        delta_time: f32,
-        resize_end: NoteEdge,
+        // delta_time: f32,
+        // resize_end: NoteEdge,
         resized_conflicts: Vec<ResizedConflicts>,
         conflicts: ConflictHistory,
+        message: TrackMessage,
     },
     SelectionAction(SelectionAction),
 }
@@ -127,36 +132,36 @@ pub enum TrackAction {
 #[derive(Debug, Clone)]
 pub enum SelectionAction {
     DrainSelect {
+        message: TrackMessage,
         new_indices: Vec<NoteIndex>,
     },
-
-    AddOneToSelected {
-        note_index: NoteIndex,
-        new_index: NoteIndex,
-    },
-
-    UnselectOne {
-        note_index: NoteIndex,
-        new_index: NoteIndex,
-    },
-
-    SelectManyNotes {
-        note_indices: Vec<NoteIndex>,
-        new_indices: Vec<NoteIndex>,
-    },
-
     SelectAllNotes {
+        message: TrackMessage,
         new_indices: Vec<NoteIndex>,
     },
-
+    UnselectOne {
+        message: TrackMessage,
+        new_index: NoteIndex,
+    },
     UnselectAllButOne {
-        note_index: NoteIndex,
+        message: TrackMessage,
         new_indices: Vec<NoteIndex>,
         new_note_index: NoteIndex,
     },
 
+    AddOneToSelected {
+        message: TrackMessage,
+        new_index: NoteIndex,
+    },
+
+    SelectManyNotes {
+        message: TrackMessage,
+        new_indices: Vec<NoteIndex>,
+    },
+
     SelectOne {
-        note_index: NoteIndex,
+        message: TrackMessage,
+
         new_indices: Vec<NoteIndex>,
         new_note_index: NoteIndex,
     },
@@ -201,7 +206,7 @@ impl TrackAction {
                 track.selected_notes_cache.clear();
             }
 
-            TrackAction::AddManyNotes { added_notes } => {
+            TrackAction::AddManyNotes { added_notes, .. } => {
                 track.remove_notes_with_conflicts(added_notes);
                 track.notes_cache.clear();
             }
@@ -222,7 +227,11 @@ impl TrackAction {
                 track.selected_notes_cache.clear();
             }
 
-            TrackAction::DraggedNotes { drag, scale, conflicts } => {
+            TrackAction::DraggedNotes {
+                message: TrackMessage::FinishDragging { drag, scale },
+                conflicts,
+                ..
+            } => {
                 let mut modified_notes: MidiNotes = track.selected.notes.clone();
 
                 for v in modified_notes.notes.iter_mut() {
@@ -239,7 +248,11 @@ impl TrackAction {
                 track.notes_cache.clear();
             }
 
-            TrackAction::ResizedNotes { delta_time, resize_end, resized_conflicts, conflicts } => {
+            TrackAction::ResizedNotes {
+                message: TrackMessage::FinishResizingNote { delta_time, resize_end },
+                resized_conflicts,
+                conflicts,
+            } => {
                 for notes_in_pitch in track.selected.notes.notes.iter_mut() {
                     for note in notes_in_pitch.iter_mut() {
                         note.resize(*resize_end, -delta_time);
@@ -265,7 +278,7 @@ impl TrackAction {
                 track.selected_notes_cache.clear();
                 track.notes_cache.clear();
                 match selection_action {
-                    SelectionAction::DrainSelect { new_indices } => {
+                    SelectionAction::DrainSelect { new_indices, .. } => {
                         println!("undo drain select");
                         let notes = track.midi_notes.remove_notes(new_indices);
                         track.selected.notes.add_midi_notes(&notes);
@@ -285,7 +298,7 @@ impl TrackAction {
                         let note = track.selected.notes.remove(new_index);
                         track.midi_notes.add(&note);
                     }
-                    SelectionAction::SelectAllNotes { new_indices } => {
+                    SelectionAction::SelectAllNotes { new_indices, .. } => {
                         let notes = track.selected.notes.remove_notes(new_indices);
                         track.midi_notes.add_midi_notes(&notes);
                     }
@@ -301,6 +314,9 @@ impl TrackAction {
                     }
                 }
             }
+            _ => {
+                panic!("undo not implemented for this action: {:?}", self);
+            }
         }
     }
 
@@ -314,76 +330,38 @@ impl TrackAction {
         track.selected_notes_cache.clear();
         match self {
             TrackAction::AddNote { message, .. } => track.update(message, dummy_history),
-            TrackAction::AddManyNotes { added_notes } => {
-                let notes_to_add = added_notes
-                    .iter()
-                    .cloned()
-                    .map(|added_note| added_note.note_to_add)
-                    .collect::<Vec<_>>()
-                    .into();
+            TrackAction::AddManyNotes { message, .. } => track.update(message, dummy_history),
+            TrackAction::RemoveNote { message, .. } => track.update(message, dummy_history),
+            TrackAction::RemoveSelectedNotes { message, .. } => {
+                track.update(message, dummy_history)
+            }
+            TrackAction::DraggedNotes { message, .. } => track.update(message, dummy_history),
+            TrackAction::ResizedNotes { message, .. } => track.update(message, dummy_history),
 
-                track.selected.notes.add_midi_notes(&notes_to_add);
-            }
-            TrackAction::RemoveNote { note_index_before, is_selected, .. } => {
-                if *is_selected {
-                    track.selected.notes.remove(&note_index_before);
-                } else {
-                    track.midi_notes.remove(&note_index_before);
-                }
-            }
-            TrackAction::RemoveSelectedNotes { .. } => {
-                track.selected.notes.delete_all();
-            }
-            TrackAction::DraggedNotes { drag, scale, conflicts: _ } => {
-                let mut modified_notes: MidiNotes = track.selected.notes.clone();
-
-                for v in modified_notes.notes.iter_mut() {
-                    for note in v.iter_mut() {
-                        note.reposition(drag.delta_pitch, drag.delta_time, &scale);
-                    }
-                }
-
-                track.selected.notes.clear();
-                track.selected.notes.add_midi_notes(&modified_notes);
-            }
-            TrackAction::ResizedNotes { delta_time, resize_end, .. } => {
-                for notes_in_pitch in track.selected.notes.notes.iter_mut() {
-                    for note in notes_in_pitch.iter_mut() {
-                        note.resize(*resize_end, *delta_time);
-                    }
-                }
-            }
             TrackAction::SelectionAction(selection_action) => match selection_action {
-                SelectionAction::DrainSelect { .. } => {
-                    track.selected.notes.drain(&mut track.midi_notes);
+                SelectionAction::DrainSelect { message, .. } => {
+                    track.update(&message, dummy_history);
                 }
-                SelectionAction::UnselectOne { note_index, .. } => {
-                    let note = track.selected.notes.remove(&note_index);
-                    track.midi_notes.add(&note);
+                SelectionAction::SelectAllNotes { message, .. } => {
+                    track.update(&message, dummy_history);
                 }
-                // SelectionAction::DeselectManyNotes { note_indices, new_indices } => {}
-                SelectionAction::UnselectAllButOne { note_index, .. } => {
-                    let selected_note = track.selected.notes.remove(&note_index);
-                    track.selected.notes.drain(&mut track.midi_notes);
-                    track.selected.notes.add(&selected_note);
+                SelectionAction::UnselectOne { message, .. } => {
+                    track.update(&message, dummy_history);
                 }
 
-                SelectionAction::SelectAllNotes { .. } => {
-                    track.midi_notes.drain(&mut track.selected.notes);
-                }
-                SelectionAction::AddOneToSelected { note_index, .. } => {
-                    let note = track.midi_notes.remove(&note_index);
-                    track.selected.notes.add(&note);
-                }
-                SelectionAction::SelectOne { note_index, .. } => {
-                    let selected_note = track.midi_notes.remove(&note_index);
-                    track.selected.notes.drain(&mut track.midi_notes);
-                    track.selected.notes.add(&selected_note);
+                SelectionAction::UnselectAllButOne { message, .. } => {
+                    track.update(&message, dummy_history);
                 }
 
-                SelectionAction::SelectManyNotes { note_indices, .. } => {
-                    let removed_notes = track.midi_notes.remove_notes(&note_indices.clone());
-                    track.selected.notes.add_midi_notes(&removed_notes);
+                SelectionAction::AddOneToSelected { message, .. } => {
+                    track.update(&message, dummy_history);
+                }
+                SelectionAction::SelectOne { message, .. } => {
+                    track.update(&message, dummy_history);
+                }
+
+                SelectionAction::SelectManyNotes { message, .. } => {
+                    track.update(&message, dummy_history);
                 }
             },
         };

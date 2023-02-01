@@ -53,8 +53,8 @@ pub struct Track {
     pub last_cursor_delta: Vector,
     pub last_delta_time: f32,
     pub drag: Drag,
-    pub ready_up_note_writing: bool,
-    pub has_added_note: bool,
+
+    pub is_ready_for_action: bool,
     track_history: TrackHistory,
 }
 
@@ -100,8 +100,7 @@ impl Track {
             last_delta_time: 0.0,
             drag: Drag::default(),
             track_history: TrackHistory::default(),
-            ready_up_note_writing: false,
-            has_added_note: true,
+            is_ready_for_action: true,
         }
     }
 
@@ -133,6 +132,7 @@ impl Track {
         removed_notes
     }
 
+    // adds a note to the MidiNotes, and checks for the necessary sideeffect
     pub fn add_note(&mut self, message: &TrackMessage, history: &mut History) {
         if let TrackMessage::AddNote { note, add_mode } = message {
             if let AddMode::Drain = add_mode {
@@ -186,7 +186,7 @@ impl Track {
             TrackMessage::ModifiersChanged(modifiers) => {
                 self.modifiers = modifiers;
             }
-            TrackMessage::Translated(translation) => {
+            TrackMessage::Translated { translation } => {
                 self.grid.translation = translation;
 
                 self.notes_cache.clear();
@@ -194,7 +194,7 @@ impl Track {
                 self.selected_notes_cache.clear();
             }
 
-            TrackMessage::Scaled(scaling, translation) => {
+            TrackMessage::Scaled { scaling, translation } => {
                 self.grid.scaling = scaling;
 
                 if let Some(translation) = translation {
@@ -213,6 +213,9 @@ impl Track {
             }
 
             TrackMessage::UpdateSelection { change_selection } => {
+                let msg =
+                    TrackMessage::UpdateSelection { change_selection: change_selection.clone() };
+
                 match change_selection {
                     ChangeSelection::DrainSelect => {
                         println!("nbr note selected: {}", self.selected.notes.number_of_notes);
@@ -223,38 +226,11 @@ impl Track {
                                 added_notes.iter().map(|x| x.note_index_after).collect();
 
                             if !history.is_dummy {
-                                self.track_history
-                                    .add_selection(SelectionAction::DrainSelect { new_indices });
+                                self.track_history.add_selection(SelectionAction::DrainSelect {
+                                    message: msg,
+                                    new_indices,
+                                });
                             }
-                        }
-                    }
-                    ChangeSelection::UnselectOne { note_index } => {
-                        println!("Unselect One");
-                        let note = self.selected.notes.remove(&note_index);
-                        let added_note = self.midi_notes.add(&note);
-
-                        if !history.is_dummy {
-                            self.track_history.add_selection(SelectionAction::UnselectOne {
-                                note_index,
-                                new_index: added_note.note_index_after,
-                            });
-                        }
-                    }
-                    ChangeSelection::UnselectAllButOne { note_index } => {
-                        println!("Unselect All But One");
-                        let selected_note = self.selected.notes.remove(&note_index);
-                        let drained_notes = self.selected.notes.drain(&mut self.midi_notes);
-                        let new_indices =
-                            drained_notes.iter().map(|x| x.note_index_after).collect();
-                        let added_note = self.selected.notes.add(&selected_note);
-                        // let new_note_index = ;
-
-                        if !history.is_dummy {
-                            self.track_history.add_selection(SelectionAction::UnselectAllButOne {
-                                note_index,
-                                new_indices,
-                                new_note_index: added_note.note_index_after,
-                            });
                         }
                     }
 
@@ -264,39 +240,73 @@ impl Track {
                         let new_indices =
                             drained_notes.iter().map(|x| x.note_index_after).collect();
                         if !history.is_dummy {
-                            self.track_history
-                                .add_selection(SelectionAction::SelectAllNotes { new_indices });
+                            self.track_history.add_selection(SelectionAction::SelectAllNotes {
+                                message: msg,
+                                new_indices,
+                            });
                         }
                     }
-                    ChangeSelection::AddOneToSelected { note_index } => {
-                        println!("Add One To Selected");
-                        let note = self.midi_notes.remove(&note_index);
-                        let added_note = self.selected.notes.add(&note);
+
+                    ChangeSelection::UnselectOne { ref note_index } => {
+                        println!("Unselect One");
+                        let note = self.selected.notes.remove(note_index);
+                        let added_note = self.midi_notes.add(&note);
+
                         if !history.is_dummy {
-                            self.track_history.add_selection(SelectionAction::AddOneToSelected {
-                                note_index,
+                            self.track_history.add_selection(SelectionAction::UnselectOne {
+                                message: msg,
+
                                 new_index: added_note.note_index_after,
                             });
                         }
                     }
 
-                    ChangeSelection::SelectOne { note_index } => {
-                        println!("Select One");
-                        let selected_note = self.midi_notes.remove(&note_index);
-                        let added_notes = self.selected.notes.drain(&mut self.midi_notes);
-                        let new_indices = added_notes.iter().map(|x| x.note_index_after).collect();
+                    ChangeSelection::UnselectAllButOne { ref note_index } => {
+                        println!("Unselect All But One");
+                        let selected_note = self.selected.notes.remove(note_index);
+                        let drained_notes = self.selected.notes.drain(&mut self.midi_notes);
+                        let new_indices =
+                            drained_notes.iter().map(|x| x.note_index_after).collect();
                         let added_note = self.selected.notes.add(&selected_note);
 
                         if !history.is_dummy {
-                            self.track_history.add_selection(SelectionAction::SelectOne {
-                                note_index,
+                            self.track_history.add_selection(SelectionAction::UnselectAllButOne {
+                                message: msg,
                                 new_indices,
                                 new_note_index: added_note.note_index_after,
                             });
                         }
                     }
 
-                    ChangeSelection::SelectMany { note_indices } => {
+                    ChangeSelection::AddOneToSelected { ref note_index } => {
+                        println!("Add One To Selected");
+                        let note = self.midi_notes.remove(note_index);
+                        let added_note = self.selected.notes.add(&note);
+                        if !history.is_dummy {
+                            self.track_history.add_selection(SelectionAction::AddOneToSelected {
+                                message: msg,
+                                new_index: added_note.note_index_after,
+                            });
+                        }
+                    }
+
+                    ChangeSelection::SelectOne { ref note_index } => {
+                        println!("Select One");
+                        let selected_note = self.midi_notes.remove(note_index);
+                        let added_notes = self.selected.notes.drain(&mut self.midi_notes);
+                        let new_indices = added_notes.iter().map(|x| x.note_index_after).collect();
+                        let added_note = self.selected.notes.add(&selected_note);
+
+                        if !history.is_dummy {
+                            self.track_history.add_selection(SelectionAction::SelectOne {
+                                message: msg,
+                                new_indices,
+                                new_note_index: added_note.note_index_after,
+                            });
+                        }
+                    }
+
+                    ChangeSelection::SelectMany { ref note_indices } => {
                         if !note_indices.is_empty() {
                             println!("Select Many");
                             let removed_notes = self.midi_notes.remove_notes(&note_indices.clone());
@@ -310,7 +320,7 @@ impl Track {
                             );
                             if !history.is_dummy {
                                 self.track_history.add_selection(
-                                    SelectionAction::SelectManyNotes { note_indices, new_indices },
+                                    SelectionAction::SelectManyNotes { message: msg, new_indices },
                                 );
                             }
                         }
@@ -345,9 +355,10 @@ impl Track {
                 if !history.is_dummy {
                     history.add_action_from_track(self.track_id);
                     self.track_history.add_track_action(TrackAction::DraggedNotes {
-                        drag,
-                        scale,
+                        // drag,
+                        // scale,
                         conflicts,
+                        message: TrackMessage::FinishDragging { drag, scale },
                     });
                 }
             }
@@ -368,10 +379,11 @@ impl Track {
                 if !history.is_dummy {
                     history.add_action_from_track(self.track_id);
                     self.track_history.add_track_action(TrackAction::ResizedNotes {
-                        delta_time,
-                        resize_end,
+                        // delta_time,
+                        // resize_end,
                         resized_conflicts,
                         conflicts,
+                        message: TrackMessage::FinishResizingNote { delta_time, resize_end },
                     });
                 }
             }
@@ -382,7 +394,7 @@ impl Track {
                 self.selection_square_cache.clear();
             }
 
-            TrackMessage::DeleteSelectedNotes => {
+            m @ TrackMessage::DeleteSelectedNotes => {
                 // let notes_before_deletion = self.midi_notes.remove_notes(&notes_to_delete);
                 let deleted_notes = self.selected.notes.delete_all();
                 println!("deleted notes: {}", deleted_notes.number_of_notes);
@@ -391,18 +403,19 @@ impl Track {
 
                 if !history.is_dummy {
                     history.add_action_from_track(self.track_id);
-                    self.track_history
-                        .add_track_action(TrackAction::RemoveSelectedNotes { deleted_notes });
+                    self.track_history.add_track_action(TrackAction::RemoveSelectedNotes {
+                        deleted_notes,
+                        message: m,
+                    });
                 }
             }
 
             TrackMessage::ReadyUpNoteWriting => {
-                self.ready_up_note_writing = true;
-                self.has_added_note = false;
+                self.is_ready_for_action = false;
             }
 
             m @ TrackMessage::AddNote { .. } => {
-                self.has_added_note = true;
+                self.is_ready_for_action = true;
                 self.add_note(&m, history);
             }
 
@@ -427,16 +440,20 @@ impl Track {
                         note_index_before,
                         note_before,
                         is_selected,
+                        message: TrackMessage::DeleteOne { note_index_before, is_selected },
                     });
                 }
             }
 
-            TrackMessage::AddManyNotes(notes_to_add) => {
-                let added_notes = self.selected.notes.add_midi_notes(&notes_to_add);
+            TrackMessage::AddManyNotes { notes } => {
+                let added_notes = self.selected.notes.add_midi_notes(&notes);
                 self.selected_notes_cache.clear();
                 if !history.is_dummy {
                     history.add_action_from_track(self.track_id);
-                    self.track_history.add_track_action(TrackAction::AddManyNotes { added_notes });
+                    self.track_history.add_track_action(TrackAction::AddManyNotes {
+                        added_notes,
+                        message: (TrackMessage::AddManyNotes { notes }),
+                    });
                 }
             }
 
@@ -470,6 +487,390 @@ impl Track {
             },
         }
     }
+
+    fn keyboard_key(
+        &self,
+        event: Event,
+        track_state: &mut TrackState,
+    ) -> Option<(event::Status, Option<TrackMessage>)> {
+        match event {
+            Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) => {
+                Some((event::Status::Captured, Some(TrackMessage::ModifiersChanged(modifiers))))
+            }
+
+            // Debug
+            Event::Keyboard(keyboard::Event::KeyPressed {
+                key_code: keyboard::KeyCode::D, ..
+            }) => {
+                println!("");
+                println!("");
+                println!("len : {}", self.track_history.action_sequence.len());
+                for act in &self.track_history.action_sequence {
+                    println!("------------------");
+                    println!("{:#?}", act);
+                }
+
+                Some((event::Status::Captured, None))
+            }
+
+            Event::Keyboard(keyboard::Event::KeyPressed {
+                key_code: keyboard::KeyCode::B, ..
+            }) => {
+                track_state.note_interaction.toggle_write_mode();
+                Some((event::Status::Captured, None))
+            }
+            Event::Keyboard(keyboard::Event::KeyPressed {
+                key_code: keyboard::KeyCode::Delete,
+                ..
+            }) => {
+                if self.is_active {
+                    Some((event::Status::Captured, Some(TrackMessage::DeleteSelectedNotes)))
+                } else {
+                    Some((event::Status::Ignored, None))
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn mouse_right_button_released(
+        &self,
+        event: Event,
+        track_state: &mut TrackState,
+    ) -> Option<(event::Status, Option<TrackMessage>)> {
+        if let Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Right)) = event {
+            if let GridInteraction::Panning { .. } = track_state.grid_interaction {
+                track_state.grid_interaction = GridInteraction::None;
+                return Some((event::Status::Captured, None));
+            }
+
+            return Some((event::Status::Ignored, None));
+        }
+        return None;
+    }
+
+    fn mouse_right_button_pressed(
+        &self,
+        event: Event,
+        track_state: &mut TrackState,
+        cursor_position: Point,
+    ) -> Option<(event::Status, Option<TrackMessage>)> {
+        if let Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) = event {
+            track_state.grid_interaction = GridInteraction::Panning {
+                translation: self.grid.translation,
+                start: cursor_position,
+            };
+
+            return Some((event::Status::Captured, None));
+        }
+        None
+    }
+
+    fn left_mouse_button_released(
+        &self,
+        event: Event,
+        track_state: &mut TrackState,
+        music_scale_cursor: Point,
+    ) -> Option<(event::Status, Option<TrackMessage>)> {
+        if let Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) = event {
+            //
+            match track_state.note_interaction {
+                //
+                NoteInteraction::Selecting { initial_music_cursor, .. } => {
+                    let delta_cursor_pos = music_scale_cursor - initial_music_cursor;
+                    let size = Size::new(delta_cursor_pos.x, delta_cursor_pos.y);
+
+                    let selecting_square = Rectangle::new(initial_music_cursor, size);
+                    track_state.note_interaction = NoteInteraction::None;
+
+                    let note_indices = self.midi_notes.get_notes_in_rect(selecting_square);
+
+                    return Some((
+                        event::Status::Captured,
+                        Some(TrackMessage::UpdateSelection {
+                            change_selection: ChangeSelection::SelectMany { note_indices },
+                        }),
+                    ));
+                }
+                NoteInteraction::Dragging { .. } => {
+                    track_state.note_interaction = NoteInteraction::None;
+
+                    if self.drag == Drag::ZERO {
+                        return Some((event::Status::Ignored, None));
+                    }
+
+                    return Some((
+                        event::Status::Captured,
+                        Some(TrackMessage::FinishDragging {
+                            drag: self.drag,
+                            scale: self.grid.scale.clone(),
+                        }),
+                    ));
+                }
+                NoteInteraction::Resizing { resize_end, .. } => {
+                    track_state.note_interaction = NoteInteraction::None;
+
+                    if self.drag.delta_time == 0.0 {
+                        return Some((event::Status::Ignored, None));
+                    }
+
+                    let delta_time = self.drag.delta_time;
+
+                    return Some((
+                        event::Status::Captured,
+                        Some(TrackMessage::FinishResizingNote { delta_time, resize_end }),
+                    ));
+                }
+                NoteInteraction::Writing { .. } => {
+                    track_state.note_interaction =
+                        NoteInteraction::Writing { writing_mode: WritingMode::None };
+                }
+
+                _ => {
+                    track_state.note_interaction = NoteInteraction::None;
+                }
+            }
+        }
+        return None;
+    }
+
+    fn left_mouse_button_pressed(
+        &self,
+        event: Event,
+        track_state: &mut TrackState,
+        projected_cursor: Point,
+        music_scale_cursor: Point,
+    ) -> Option<(event::Status, Option<TrackMessage>)> {
+        // TODO change the resize note rectangle
+        //
+        if let Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) = event {
+            // write or delete a note if in pen mode
+            if track_state.note_interaction.is_write_mode() {
+                return Some(track_state.note_interaction.init_note_writing(
+                    music_scale_cursor,
+                    &self,
+                    &mut track_state.pending,
+                ));
+            }
+
+            // Check if a Selected note has been clicked
+            if let Some(OverNote { note_index: _, note_edge }) =
+                self.selected.notes.get_note_under_cursor(&self.grid, music_scale_cursor)
+            {
+                let new_selection = self.selected.notes.clone();
+                let message = (event::Status::Captured, None);
+
+                track_state.drag_or_resize(note_edge, projected_cursor, new_selection);
+
+                return Some(message);
+            }
+
+            // Check if a non-Selected note has been clicked
+            if let Some(OverNote { note_index, note_edge }) =
+                self.midi_notes.get_note_under_cursor(&self.grid, music_scale_cursor)
+            {
+                let mut new_selected = self.selected.notes.clone();
+                let note = self.midi_notes.get(note_index);
+
+                // if the control key is pressed
+                //
+                let message = if self.modifiers.control() {
+                    //
+                    // add the clicked note to the Selected notes
+                    let added_note = new_selected.add(&note);
+
+                    (
+                        event::Status::Captured,
+                        Some(TrackMessage::UpdateSelection {
+                            change_selection: ChangeSelection::AddOneToSelected {
+                                note_index: added_note.note_index_after,
+                            },
+                        }),
+                    )
+                } else {
+                    // if the control key is not pressed, clear the Selected notes and
+                    // select the clicked note
+                    //
+                    new_selected.clear();
+                    new_selected.add(&note);
+
+                    (
+                        event::Status::Captured,
+                        Some(TrackMessage::UpdateSelection {
+                            change_selection: ChangeSelection::SelectOne { note_index },
+                        }),
+                    )
+                };
+
+                track_state.drag_or_resize(note_edge, projected_cursor, new_selected);
+
+                return Some(message);
+            }
+
+            // if no note has been clicked, start selecting
+            track_state.note_interaction = NoteInteraction::Selecting {
+                initial_music_cursor: music_scale_cursor,
+                initial_cursor_proj: projected_cursor,
+            };
+
+            // if the control key is not pressed, clear the Selected notes
+            if !self.modifiers.control() {
+                println!("clearing selection");
+                return Some((
+                    event::Status::Captured,
+                    Some(TrackMessage::UpdateSelection {
+                        change_selection: ChangeSelection::DrainSelect,
+                    }),
+                ));
+            }
+
+            return Some((event::Status::Captured, None));
+        }
+        // _ => return None,
+        return None;
+    }
+
+    fn cursor_moved(
+        &self,
+        event: Event,
+        track_state: &mut TrackState,
+        cursor_position: Point,
+        projected_cursor: Point,
+        music_scale_cursor: Point,
+        bounds: Rectangle,
+    ) -> Option<(event::Status, Option<TrackMessage>)> {
+        if let Event::Mouse(mouse::Event::CursorMoved { .. }) = event {
+            // Panning
+            //
+            //
+            if let GridInteraction::Panning { translation, start } = track_state.grid_interaction {
+                let mut new_translation = Vector::new(
+                    translation.x + (cursor_position.x - start.x) / self.grid.scaling.x,
+                    translation.y + (cursor_position.y - start.y) / self.grid.scaling.y,
+                );
+
+                self.grid.limit_to_bounds(&mut new_translation, bounds, self.grid.scaling);
+
+                return Some((
+                    event::Status::Captured,
+                    Some(TrackMessage::Translated { translation: new_translation }),
+                ));
+            };
+
+            match &mut track_state.note_interaction {
+                inter @ NoteInteraction::Resizing { .. } => {
+                    return Some(inter.handle_resizing(music_scale_cursor, self));
+                }
+                inter @ NoteInteraction::Selecting { .. } => {
+                    return Some(inter.handle_selecting(projected_cursor, music_scale_cursor));
+                }
+                inter @ NoteInteraction::Dragging { .. } => {
+                    return Some(inter.handle_dragging(projected_cursor, self));
+                }
+                inter @ NoteInteraction::Writing { .. } => {
+                    // TODO TODO
+
+                    let note_writing = inter.handle_note_writing(
+                        &mut track_state.pending,
+                        music_scale_cursor,
+                        &self,
+                    );
+                    println!("track_state.is_ready: {:?}", track_state.pending);
+                    return Some(note_writing);
+                }
+                _ => {}
+            };
+
+            if let NoteInteraction::Writing { .. } = track_state.note_interaction {
+                return Some((event::Status::Ignored, None));
+
+                // no mouse interaction yet
+            } else {
+                let mut over_note =
+                    self.selected.notes.get_note_under_cursor(&self.grid, music_scale_cursor);
+
+                if let None = over_note {
+                    over_note =
+                        self.midi_notes.get_note_under_cursor(&self.grid, music_scale_cursor);
+                }
+
+                // check if the mouse is over a note or the edge of a note
+                match over_note {
+                    //
+                    Some(OverNote { note_index: _, note_edge: NoteEdge::Start })
+                    | Some(OverNote { note_index: _, note_edge: NoteEdge::End }) => {
+                        track_state.note_interaction = NoteInteraction::ResizingHover;
+                    }
+
+                    _ => {
+                        track_state.note_interaction = NoteInteraction::None;
+                    }
+                };
+                return Some((event::Status::Ignored, None));
+            }
+        }
+        None
+    }
+
+    fn mouse_wheel(
+        &self,
+        event: Event,
+        cursor: Cursor,
+        bounds: Rectangle,
+        cursor_in_bounds: bool,
+    ) -> Option<(event::Status, Option<TrackMessage>)> {
+        if let Event::Mouse(mouse::Event::WheelScrolled { delta }) = event {
+            match delta {
+                mouse::ScrollDelta::Lines { y, .. } | mouse::ScrollDelta::Pixels { y, .. } => {
+                    if !cursor_in_bounds {
+                        return Some((event::Status::Ignored, None));
+                    }
+
+                    if y < 0.0 && self.grid.scaling.x <= MIN_SCALING.x
+                        || y > 0.0 && self.grid.scaling.x >= MAX_SCALING.x
+                        || y < 0.0 && self.grid.scaling.y <= MIN_SCALING.y
+                        || y > 0.0 && self.grid.scaling.y >= MAX_SCALING.y
+                    {
+                        return Some((event::Status::Captured, None));
+                    }
+
+                    let old_scaling = self.grid.scaling;
+                    let factor0 = Vector::new(
+                        (1.0 + y / 30.0).max(MIN_SCALING.x).min(MAX_SCALING.x),
+                        (1.0 + y / 30.0).max(MIN_SCALING.y).min(MAX_SCALING.y),
+                    );
+
+                    let scaling = Vector::new(
+                        self.grid.scaling.x * factor0.x,
+                        self.grid.scaling.y * factor0.y,
+                    );
+
+                    let translation =
+                        if let Some(cursor_to_center) = cursor.position_from(bounds.center()) {
+                            let factor = scaling - old_scaling;
+
+                            let mut new_translation = self.grid.translation
+                                - Vector::new(
+                                    cursor_to_center.x * factor.x / (scaling.x * scaling.x),
+                                    cursor_to_center.y * factor.y / (scaling.y * scaling.y),
+                                );
+
+                            self.grid.limit_to_bounds(&mut new_translation, bounds, scaling);
+
+                            Some(new_translation)
+                        } else {
+                            None
+                        };
+
+                    return Some((
+                        event::Status::Captured,
+                        Some(TrackMessage::Scaled { scaling, translation }),
+                    ));
+                }
+            }
+        }
+        return None;
+    }
 }
 
 #[derive(Clone, Debug, Copy)]
@@ -481,10 +882,10 @@ pub enum AddMode {
 
 #[derive(Clone, Debug)]
 pub enum TrackMessage {
-    Translated(Vector),
-    Scaled(Vector, Option<Vector>),
+    Translated { translation: Vector },
+    Scaled { scaling: Vector, translation: Option<Vector> },
     AddNote { note: MidiNote, add_mode: AddMode }, // bool: first_note_of_write_mode
-    AddManyNotes(MidiNotes),
+    AddManyNotes { notes: MidiNotes },
     CursorMoved,
     DeleteSelectedNotes,
     DeleteOne { note_index_before: NoteIndex, is_selected: bool },
@@ -507,10 +908,27 @@ pub enum TrackMessage {
     Redo,
 }
 
-#[derive(Default)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq)]
+pub enum Pending {
+    AddNote,
+    DeleteNote,
+    None,
+}
+
 pub struct TrackState {
     pub grid_interaction: GridInteraction,
     pub note_interaction: NoteInteraction,
+    pub pending: Pending,
+}
+
+impl Default for TrackState {
+    fn default() -> Self {
+        Self {
+            grid_interaction: GridInteraction::default(),
+            note_interaction: NoteInteraction::default(),
+            pending: Pending::None,
+        }
+    }
 }
 
 impl TrackState {
@@ -551,14 +969,13 @@ impl canvas::Program<TrackMessage, PianoTheme> for Track {
         bounds: Rectangle,
         cursor: Cursor,
     ) -> (event::Status, Option<TrackMessage>) {
-        let cursor_in_bounds: bool = cursor.is_over(&bounds);
-
         let cursor_position = if let Some(pos) = cursor.position_from(bounds.position()) {
             pos
         } else {
             return (event::Status::Ignored, None);
         };
 
+        let cursor_in_bounds: bool = cursor.is_over(&bounds);
         // a click or a scroll outside the track window has not effect
         if !cursor_in_bounds {
             match event {
@@ -568,352 +985,58 @@ impl canvas::Program<TrackMessage, PianoTheme> for Track {
                 }
                 _ => {}
             }
+
+            match track_state.note_interaction {
+                NoteInteraction::Selecting { .. } | NoteInteraction::Writing { .. } => {
+                    return (event::Status::Ignored, None);
+                }
+                _ => {}
+            }
         }
 
         // let region = self.grid.visible_region(bounds.size());
 
-        let projected_cursor = self.grid.to_track_axes(cursor_position, &bounds.size());
         // BUG:  when cursor is out of bounds
+
+        if let Some(msg) = self.keyboard_key(event, track_state) {
+            return msg;
+        }
+
+        if let Some(msg) = self.mouse_right_button_released(event, track_state) {
+            return msg;
+        }
+        if let Some(msg) = self.mouse_right_button_pressed(event, track_state, cursor_position) {
+            return msg;
+        }
+
+        let projected_cursor = self.grid.to_track_axes(cursor_position, &bounds.size());
         let music_scale_cursor = self.grid.adjust_to_music_scale(projected_cursor);
 
-        match event {
-            Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) => {
-                (event::Status::Captured, Some(TrackMessage::ModifiersChanged(modifiers)))
-            }
-
-            // DEbug
-            Event::Keyboard(keyboard::Event::KeyPressed {
-                key_code: keyboard::KeyCode::D, ..
-            }) => {
-                println!("");
-                println!("");
-                println!("len : {}", self.track_history.action_sequence.len());
-                for act in &self.track_history.action_sequence {
-                    println!("------------------");
-                    println!("{:#?}", act);
-                }
-                // println!("{:#?}", self.track_history.action_sequence);
-                (event::Status::Captured, None)
-            }
-
-            Event::Keyboard(keyboard::Event::KeyPressed {
-                key_code: keyboard::KeyCode::B, ..
-            }) => {
-                track_state.note_interaction.toggle_write_mode();
-                (event::Status::Captured, None)
-            }
-            Event::Keyboard(keyboard::Event::KeyPressed {
-                key_code: keyboard::KeyCode::Delete,
-                ..
-            }) => {
-                // let notes_to_delete = self.selected.notes.clone();
-                if self.is_active {
-                    (event::Status::Captured, Some(TrackMessage::DeleteSelectedNotes))
-                } else {
-                    (event::Status::Ignored, None)
-                }
-            }
-
-            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Right)) => {
-                if let GridInteraction::Panning { .. } = track_state.grid_interaction {
-                    track_state.grid_interaction = GridInteraction::None;
-                    return (event::Status::Captured, None);
-                }
-
-                (event::Status::Ignored, None)
-            }
-
-            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
-                //
-                match track_state.note_interaction {
-                    //
-                    NoteInteraction::Selecting { initial_music_cursor, .. } => {
-                        let delta_cursor_pos = music_scale_cursor - initial_music_cursor;
-                        let size = Size::new(delta_cursor_pos.x, delta_cursor_pos.y);
-
-                        let selecting_square = Rectangle::new(initial_music_cursor, size);
-                        track_state.note_interaction = NoteInteraction::None;
-
-                        let note_indices = self.midi_notes.get_notes_in_rect(selecting_square);
-
-                        return (
-                            event::Status::Captured,
-                            Some(TrackMessage::UpdateSelection {
-                                change_selection: ChangeSelection::SelectMany { note_indices },
-                            }),
-                        );
-                    }
-                    NoteInteraction::Dragging { .. } => {
-                        track_state.note_interaction = NoteInteraction::None;
-
-                        if self.drag == Drag::ZERO {
-                            return (event::Status::Ignored, None);
-                        }
-
-                        return (
-                            event::Status::Captured,
-                            Some(TrackMessage::FinishDragging {
-                                drag: self.drag,
-                                scale: self.grid.scale.clone(),
-                            }),
-                        );
-                    }
-                    NoteInteraction::Resizing { resize_end, .. } => {
-                        track_state.note_interaction = NoteInteraction::None;
-
-                        if self.drag.delta_time == 0.0 {
-                            return (event::Status::Ignored, None);
-                        }
-
-                        let delta_time = self.drag.delta_time;
-
-                        return (
-                            event::Status::Captured,
-                            Some(TrackMessage::FinishResizingNote { delta_time, resize_end }),
-                        );
-                    }
-                    NoteInteraction::Writing { .. } => {
-                        track_state.note_interaction =
-                            NoteInteraction::Writing { writing_mode: WritingMode::None };
-                    }
-
-                    _ => {
-                        track_state.note_interaction = NoteInteraction::None;
-                    }
-                }
-                //
-
-                (event::Status::Ignored, None)
-            }
-
-            // left button
-            //
-            // TODO
-            //
-            //
-            //
-            // change the resize note rectangle
-            //
-            //
-            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
-                //
-
-                // write or delete a note if in pen mode
-                if track_state.note_interaction.is_write_mode() {
-                    return track_state
-                        .note_interaction
-                        .init_note_writing(music_scale_cursor, &self);
-                }
-
-                // Check if a Selected note has been clicked
-                if let Some(OverNote { note_index: _, note_edge }) =
-                    self.selected.notes.get_note_under_cursor(&self.grid, music_scale_cursor)
-                {
-                    let new_selection = self.selected.notes.clone();
-                    let message = (event::Status::Captured, None);
-
-                    track_state.drag_or_resize(note_edge, projected_cursor, new_selection);
-
-                    return message;
-                }
-
-                // Check if a non-Selected note has been clicked
-                if let Some(OverNote { note_index, note_edge }) =
-                    self.midi_notes.get_note_under_cursor(&self.grid, music_scale_cursor)
-                {
-                    let mut new_selected = self.selected.notes.clone();
-                    let note = self.midi_notes.get(note_index);
-
-                    // if the control key is pressed
-                    //
-                    let message = if self.modifiers.control() {
-                        //
-                        // add the clicked note to the Selected notes
-                        let added_note = new_selected.add(&note);
-
-                        (
-                            event::Status::Captured,
-                            Some(TrackMessage::UpdateSelection {
-                                change_selection: ChangeSelection::AddOneToSelected {
-                                    note_index: added_note.note_index_after,
-                                },
-                            }),
-                        )
-                    } else {
-                        // if the control key is not pressed, clear the Selected notes and
-                        // select the clicked note
-                        //
-                        new_selected.clear();
-                        new_selected.add(&note);
-
-                        (
-                            event::Status::Captured,
-                            Some(TrackMessage::UpdateSelection {
-                                change_selection: ChangeSelection::SelectOne { note_index },
-                            }),
-                        )
-                    };
-
-                    track_state.drag_or_resize(note_edge, projected_cursor, new_selected);
-
-                    return message;
-                }
-
-                // if no note has been clicked, start selecting
-                track_state.note_interaction = NoteInteraction::Selecting {
-                    initial_music_cursor: music_scale_cursor,
-                    initial_cursor_proj: projected_cursor,
-                };
-
-                // if the control key is not pressed, clear the Selected notes
-                if !self.modifiers.control() {
-                    println!("clearing selection");
-                    return (
-                        event::Status::Captured,
-                        Some(TrackMessage::UpdateSelection {
-                            change_selection: ChangeSelection::DrainSelect,
-                        }),
-                    );
-                }
-
-                (event::Status::Captured, None)
-            }
-
-            //
-            //
-            // Right button
-            //
-            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
-                //
-                track_state.grid_interaction = GridInteraction::Panning {
-                    translation: self.grid.translation,
-                    start: cursor_position,
-                };
-
-                (event::Status::Captured, None)
-            }
-
-            //
-            // moving cursor
-            //
-            Event::Mouse(mouse::Event::CursorMoved { .. }) => {
-                // Panning
-                //
-                //
-                if let GridInteraction::Panning { translation, start } =
-                    track_state.grid_interaction
-                {
-                    let mut new_translation = Vector::new(
-                        translation.x + (cursor_position.x - start.x) / self.grid.scaling.x,
-                        translation.y + (cursor_position.y - start.y) / self.grid.scaling.y,
-                    );
-
-                    self.grid.limit_to_bounds(&mut new_translation, bounds, self.grid.scaling);
-
-                    return (
-                        event::Status::Captured,
-                        Some(TrackMessage::Translated(new_translation)),
-                    );
-                };
-
-                match &mut track_state.note_interaction {
-                    inter @ NoteInteraction::Resizing { .. } => {
-                        return inter.handle_resizing(music_scale_cursor, self);
-                    }
-                    inter @ NoteInteraction::Selecting { .. } => {
-                        return inter.handle_selecting(projected_cursor, music_scale_cursor);
-                    }
-                    inter @ NoteInteraction::Dragging { .. } => {
-                        return inter.handle_dragging(projected_cursor, self);
-                    }
-                    NoteInteraction::Writing { writing_mode } => {
-                        // TODO TODO
-
-                        return writing_mode.handle_note_writing(music_scale_cursor, &self);
-                    }
-                    _ => {}
-                };
-
-                if let NoteInteraction::Writing { .. } = track_state.note_interaction {
-                    return (event::Status::Ignored, None);
-
-                    // no mouse interaction yet
-                } else {
-                    let mut over_note =
-                        self.selected.notes.get_note_under_cursor(&self.grid, music_scale_cursor);
-
-                    if let None = over_note {
-                        over_note =
-                            self.midi_notes.get_note_under_cursor(&self.grid, music_scale_cursor);
-                    }
-
-                    // check if the mouse is over a note or the edge of a note
-                    match over_note {
-                        //
-                        Some(OverNote { note_index: _, note_edge: NoteEdge::Start })
-                        | Some(OverNote { note_index: _, note_edge: NoteEdge::End }) => {
-                            track_state.note_interaction = NoteInteraction::ResizingHover;
-                        }
-
-                        _ => {
-                            track_state.note_interaction = NoteInteraction::None;
-                        }
-                    };
-                    return (event::Status::Ignored, None);
-                }
-
-                // (event_status, message)
-            }
-
-            Event::Mouse(mouse::Event::WheelScrolled { delta }) => match delta {
-                mouse::ScrollDelta::Lines { y, .. } | mouse::ScrollDelta::Pixels { y, .. } => {
-                    if !cursor_in_bounds {
-                        return (event::Status::Ignored, None);
-                    }
-
-                    if y < 0.0 && self.grid.scaling.x <= MIN_SCALING.x
-                        || y > 0.0 && self.grid.scaling.x >= MAX_SCALING.x
-                        || y < 0.0 && self.grid.scaling.y <= MIN_SCALING.y
-                        || y > 0.0 && self.grid.scaling.y >= MAX_SCALING.y
-                    {
-                        return (event::Status::Captured, None);
-                    }
-
-                    let old_scaling = self.grid.scaling;
-                    let factor0 = Vector::new(
-                        (1.0 + y / 30.0).max(MIN_SCALING.x).min(MAX_SCALING.x),
-                        (1.0 + y / 30.0).max(MIN_SCALING.y).min(MAX_SCALING.y),
-                    );
-
-                    let scaling = Vector::new(
-                        self.grid.scaling.x * factor0.x,
-                        self.grid.scaling.y * factor0.y,
-                    );
-
-                    let translation =
-                        if let Some(cursor_to_center) = cursor.position_from(bounds.center()) {
-                            let factor = scaling - old_scaling;
-
-                            let mut new_translation = self.grid.translation
-                                - Vector::new(
-                                    cursor_to_center.x * factor.x / (scaling.x * scaling.x),
-                                    cursor_to_center.y * factor.y / (scaling.y * scaling.y),
-                                );
-
-                            self.grid.limit_to_bounds(&mut new_translation, bounds, scaling);
-
-                            Some(new_translation)
-                        } else {
-                            None
-                        };
-
-                    (event::Status::Captured, Some(TrackMessage::Scaled(scaling, translation)))
-                }
-            },
-            //     _ => (event::Status::Ignored, None),
-            // },
-            _ => (event::Status::Ignored, None),
+        if let Some(msg) =
+            self.left_mouse_button_pressed(event, track_state, projected_cursor, music_scale_cursor)
+        {
+            return msg;
         }
+        if let Some(msg) = self.left_mouse_button_released(event, track_state, music_scale_cursor) {
+            return msg;
+        }
+
+        if let Some(msg) = self.cursor_moved(
+            event,
+            track_state,
+            cursor_position,
+            projected_cursor,
+            music_scale_cursor,
+            bounds,
+        ) {
+            return msg;
+        }
+
+        if let Some(msg) = self.mouse_wheel(event, cursor, bounds, cursor_in_bounds) {
+            return msg;
+        }
+
+        (event::Status::Ignored, None)
     }
 
     fn draw(

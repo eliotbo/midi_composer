@@ -186,18 +186,21 @@ impl Application for MidiEditor {
                 Command::none()
             }
             EditorMessage::EventOccurred(event) => match event {
+                //  TODO: handle modifier keys here
+                //
                 // redo
                 Event::Keyboard(keyboard::Event::KeyPressed { modifiers, key_code })
                     if modifiers.command()
                         && modifiers.shift()
                         && key_code == keyboard::KeyCode::Z =>
                 {
-                    // println!("Redoing");
+                    println!("Redoing");
                     self.handle_redo()
                 }
                 Event::Keyboard(keyboard::Event::KeyPressed { modifiers, key_code })
                     if modifiers.command() && key_code == keyboard::KeyCode::Z =>
                 {
+                    println!("Undoing");
                     self.handle_undo()
                 }
 

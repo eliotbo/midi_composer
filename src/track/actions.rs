@@ -272,6 +272,7 @@ impl TrackAction {
                 Self::handle_conflicts(track, &conflicts);
 
                 track.selected_notes_cache.clear();
+                track.notes_cache.clear();
             }
 
             TrackAction::SelectionAction(selection_action) => {
@@ -328,6 +329,7 @@ impl TrackAction {
         dummy_history.is_dummy = true;
         track.notes_cache.clear();
         track.selected_notes_cache.clear();
+        println!("redo self: {:?}", self);
         match self {
             TrackAction::AddNote { message, .. } => track.update(message, dummy_history),
             TrackAction::AddManyNotes { message, .. } => track.update(message, dummy_history),
@@ -335,8 +337,41 @@ impl TrackAction {
             TrackAction::RemoveSelectedNotes { message, .. } => {
                 track.update(message, dummy_history)
             }
-            TrackAction::DraggedNotes { message, .. } => track.update(message, dummy_history),
-            TrackAction::ResizedNotes { message, .. } => track.update(message, dummy_history),
+            TrackAction::DraggedNotes { message, .. } => {
+                // track.update(message, dummy_history)
+                if let TrackMessage::FinishDragging { drag, scale } = message {
+                    let mut modified_notes: MidiNotes = track.selected.notes.clone();
+
+                    for v in modified_notes.notes.iter_mut() {
+                        for note in v.iter_mut() {
+                            note.reposition(drag.delta_pitch, drag.delta_time, &scale);
+                        }
+                    }
+
+                    track.midi_notes.resolve_conflicts(&track.selected.notes);
+
+                    track.selected.notes.clear();
+                    track.selected.notes.add_midi_notes(&modified_notes);
+
+                    track.selected_notes_cache.clear();
+                    track.notes_cache.clear();
+                }
+            }
+            TrackAction::ResizedNotes { message, .. } => {
+                // track.update(message, dummy_history)
+                if let TrackMessage::FinishResizingNote { delta_time, resize_end } = message {
+                    for notes_in_pitch in track.selected.notes.notes.iter_mut() {
+                        for note in notes_in_pitch.iter_mut() {
+                            note.resize(*resize_end, *delta_time);
+                        }
+                    }
+                    track.selected.notes.resolve_self_resize_conflicts();
+                    track.midi_notes.resolve_conflicts(&track.selected.notes);
+
+                    track.selected_notes_cache.clear();
+                    track.notes_cache.clear();
+                }
+            }
 
             TrackAction::SelectionAction(selection_action) => match selection_action {
                 SelectionAction::DrainSelect { message, .. } => {

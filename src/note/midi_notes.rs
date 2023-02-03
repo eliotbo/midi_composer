@@ -389,7 +389,7 @@ impl MidiNotes {
         if time_index > 0 {
             let curr = &mut self.notes[pitch][time_index - 1];
             if note.start < curr.end {
-                println!("conflict: RESIZING");
+                // println!("conflict: RESIZING");
                 let delta_time = note.start - curr.end;
                 resized_notes.push(ResizedConflicts {
                     note_index: NoteIndex {
@@ -415,7 +415,7 @@ impl MidiNotes {
 
             // overlaps partly
             if note.end > curr.start && note.end < curr.end {
-                println!("conflict: RESIZING2");
+                // println!("conflict: RESIZING2");
                 let delta_time = note.end - curr.start;
                 resized_notes.push(ResizedConflicts {
                     note_index: NoteIndex { pitch_index: pitch, time_index: i },
@@ -428,7 +428,7 @@ impl MidiNotes {
 
             // check for overlaps completely
             if note.end > curr.start && note.end >= curr.end {
-                println!("conflict: REMOVING");
+                // println!("conflict: REMOVING");
                 notes_to_remove.push(i);
             }
         }
@@ -1192,7 +1192,7 @@ impl Pitch {
 pub enum WritingMode {
     Deleting,
     DeletingSelected,
-    BeatFraction, // pending AddNote
+    BeatFraction,
     CustomWriting(Point),
     None,
 }
@@ -1274,6 +1274,8 @@ impl NoteInteraction {
         music_scale_cursor: Point,
     ) -> (event::Status, Option<crate::track::TrackMessage>) {
         if let NoteInteraction::Selecting { initial_music_cursor, initial_cursor_proj } = self {
+            // println!("");
+            // println!("selecting");
             let cursor_delta = music_scale_cursor - *initial_music_cursor;
 
             let selecting_square =
@@ -1290,6 +1292,7 @@ impl NoteInteraction {
                 Some(TrackMessage::Selecting { selecting_square, direct_selecting_square }),
             );
         } else {
+            // never reached
             return (event::Status::Ignored, None);
         }
     }
@@ -1341,11 +1344,10 @@ impl NoteInteraction {
         &mut self,
         music_scale_cursor: Point,
         track: &crate::track::Track,
-        track_state_pending: &mut Pending,
     ) -> (event::Status, Option<crate::track::TrackMessage>) {
         // let first_note_of_write_mode = true;
 
-        println!("writing mode: {:?}", &self);
+        // println!("writing mode: {:?}", &self);
 
         // if there is already a note under the cursor, delete it, and start the
         // WritingMode::Deleting mode
@@ -1354,7 +1356,7 @@ impl NoteInteraction {
             track.midi_notes.get_note_under_cursor(&track.grid, music_scale_cursor)
         {
             *self = NoteInteraction::Writing { writing_mode: WritingMode::Deleting };
-            println!("writing mode: {:?}", &self);
+            // println!("writing mode: {:?}", &self);
             return (
                 event::Status::Captured,
                 Some(TrackMessage::DeleteOne { note_index_before: note_index, is_selected: false }),
@@ -1367,7 +1369,7 @@ impl NoteInteraction {
             track.selected.notes.get_note_under_cursor(&track.grid, music_scale_cursor)
         {
             *self = NoteInteraction::Writing { writing_mode: WritingMode::DeletingSelected };
-            println!("writing mode: {:?}", &self);
+            // println!("writing mode: {:?}", &self);
 
             return (
                 event::Status::Captured,
@@ -1382,7 +1384,7 @@ impl NoteInteraction {
             *self = NoteInteraction::Writing {
                 writing_mode: WritingMode::CustomWriting(music_scale_cursor),
             };
-            println!("writing mode: {:?}", &self);
+            // println!("writing mode: {:?}", &self);
 
             let pitch = Pitch(music_scale_cursor.y.floor() as i16);
             let start = music_scale_cursor.x.floor();
@@ -1397,14 +1399,13 @@ impl NoteInteraction {
         } else {
             // if alt is not pressed, add a note with length equal to the current beat fraction
             *self = NoteInteraction::Writing { writing_mode: WritingMode::BeatFraction };
-            println!("writing mode: {:?}", &self);
+            // println!("writing mode: {:?}", &self);
 
             let pitch = Pitch(music_scale_cursor.y.floor() as i16);
             let start = music_scale_cursor.x.floor();
             let end = start + 1.0; // TODO: implement beat fraction
 
             let note = MidiNote::new(start, end, pitch);
-            *track_state_pending = Pending::AddNote;
 
             return (
                 event::Status::Captured,
@@ -1415,25 +1416,10 @@ impl NoteInteraction {
 
     pub fn handle_note_writing(
         &mut self,
-        // track_state_ready: &mut bool,
-        track_state_pending: &mut Pending,
+
         music_scale_cursor: Point,
         track: &crate::track::Track,
-    ) -> (event::Status, Option<crate::track::TrackMessage>) {
-        //
-        //
-        //
-        if track_state_pending == &Pending::AddNote && track.is_ready_for_action {
-            *track_state_pending = Pending::None;
-            return (event::Status::Captured, Some(TrackMessage::ReadyUpNoteWriting));
-        }
-
-        // if a message has not been acted on yet, ignore this event and wait for the
-        // message to be acted on
-        if !(*track_state_pending == Pending::None) {
-            return (event::Status::Captured, None);
-        }
-
+    ) -> Option<(event::Status, Option<crate::track::TrackMessage>)> {
         match self {
             //
             // If there is a non-selected note under the cursor, delete it
@@ -1441,13 +1427,13 @@ impl NoteInteraction {
                 if let Some(OverNote { note_index, .. }) =
                     track.midi_notes.get_note_under_cursor(&track.grid, music_scale_cursor)
                 {
-                    return (
+                    return Some((
                         event::Status::Captured,
                         Some(TrackMessage::DeleteOne {
                             note_index_before: note_index,
                             is_selected: false,
                         }),
-                    );
+                    ));
                 }
             }
             //
@@ -1456,13 +1442,13 @@ impl NoteInteraction {
                 if let Some(OverNote { note_index, .. }) =
                     track.selected.notes.get_note_under_cursor(&track.grid, music_scale_cursor)
                 {
-                    return (
+                    return Some((
                         event::Status::Captured,
                         Some(TrackMessage::DeleteOne {
                             note_index_before: note_index,
                             is_selected: true,
                         }),
-                    );
+                    ));
                 }
             }
             //
@@ -1470,15 +1456,10 @@ impl NoteInteraction {
             NoteInteraction::Writing { writing_mode: WritingMode::BeatFraction } => {
                 // if a message has already been sent or cursor is already on an added note, do nothing
 
-                // if track.ready_up_note_writing {
-                //     // track.ready_up_note_writing = false;
-                //     *pending_add_note = false;
-                // }
-
                 if track.selected.notes.on_note(&track.grid, music_scale_cursor) {
-                    return (event::Status::Captured, None);
+                    return None;
                 }
-                println!("new notes");
+                // println!("new notes");
 
                 let pitch = Pitch(music_scale_cursor.y.floor() as i16);
                 let start = music_scale_cursor.x.floor();
@@ -1487,12 +1468,10 @@ impl NoteInteraction {
 
                 let note = MidiNote::new(start + tiny, end - tiny, pitch);
 
-                *track_state_pending = Pending::AddNote;
-
-                return (
+                return Some((
                     event::Status::Captured,
                     Some(TrackMessage::AddNote { note, add_mode: AddMode::Normal }),
-                );
+                ));
             }
             //
             // Write a note with a start where the cursor was when clicking with alt modifier occurred.
@@ -1509,23 +1488,20 @@ impl NoteInteraction {
 
                 let delta_time = music_scale_cursor.x - init_cursor.x;
 
-                return (
+                return Some((
                     event::Status::Captured,
                     Some(TrackMessage::ResizedNotes {
                         delta_time,
                         original_notes: notes,
                         resize_end: NoteEdge::End,
                     }),
-                );
+                ));
             }
 
-            // if there is already a note under the cursor, delete it
-            _ => {
-                return (event::Status::Ignored, None);
-            }
+            _ => {}
         }
 
-        return (event::Status::Ignored, None);
+        return None;
     }
 }
 

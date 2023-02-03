@@ -39,6 +39,10 @@ use crate::util::{Action, History, TrackId};
 
 use std::collections::HashMap;
 
+// TODO: OMGOMGOMGOMGOM
+//  I NEED TO SEND THE EVENTS TO THE TRACK'S UPDATE FUNCTION AND CHANGE THE TRACK'S STATE
+// OVER THERE RATHER THAN INSIDE THE CANVAS PROGRAM, shit shit shit
+
 // TODO: make a track active by clicking on it and deactivate all other tracks
 
 // TODO: make my own Vector type that is compatible with element-wise operations
@@ -72,7 +76,8 @@ struct MidiEditor {
 impl Default for MidiEditor {
     fn default() -> Self {
         let mut tracks: HashMap<TrackId, Track> =
-            vec![0, 1].iter().map(|id| (*id, Track::new(*id))).collect();
+            // vec![0, 1].iter().map(|id| (*id, Track::new(*id))).collect();
+            vec![0].iter().map(|id| (*id, Track::new(*id))).collect();
 
         let track0 = tracks.get_mut(&0).unwrap();
         track0.is_active = true;
@@ -82,8 +87,8 @@ impl Default for MidiEditor {
 
         Self {
             history: History::default(),
-            tracks, // vec![Track::new(0), Track::new(1)],
-            track_order: vec![0, 1],
+            tracks,               // vec![Track::new(0), Track::new(1)],
+            track_order: vec![0], //vec![0, 1],
             debug_text: "debug".to_string(),
             _timein_info: TimingInfo::default(),
             _selection: Selected { _track_number: 0, _note_number: 0 },
@@ -187,7 +192,7 @@ impl Application for MidiEditor {
                         && modifiers.shift()
                         && key_code == keyboard::KeyCode::Z =>
                 {
-                    println!("Redoing");
+                    // println!("Redoing");
                     self.handle_redo()
                 }
                 Event::Keyboard(keyboard::Event::KeyPressed { modifiers, key_code })

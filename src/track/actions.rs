@@ -279,7 +279,7 @@ impl TrackAction {
                 track.notes_cache.clear();
                 match selection_action {
                     SelectionAction::DrainSelect { new_indices, .. } => {
-                        println!("undo drain select");
+                        // println!("undo drain select");
                         let notes = track.midi_notes.remove_notes(new_indices);
                         track.selected.notes.add_midi_notes(&notes);
                     }

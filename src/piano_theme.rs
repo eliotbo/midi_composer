@@ -9,12 +9,7 @@ use iced_native::widget::rule;
 
 macro_rules! color {
     ($red:expr, $green:expr, $blue:expr) => {
-        Color::from_rgba(
-            $red as f32 / 255.0,
-            $green as f32 / 255.0,
-            $blue as f32 / 255.0,
-            1.0,
-        )
+        Color::from_rgba($red as f32 / 255.0, $green as f32 / 255.0, $blue as f32 / 255.0, 1.0)
     };
     ($red:expr, $green:expr, $blue:expr, $opacity:expr) => {
         Color::from_rgba(
@@ -31,6 +26,7 @@ pub struct PianoTheme {
 
     pub piano_background: Color,
     pub background: Color,
+    pub player_head: Color,
     currant_line: Color,
 
     pub cyan: Color,
@@ -47,18 +43,14 @@ impl PianoTheme {
         text: color!(120, 120, 120),
 
         piano_background: color!(30, 30, 33),
+        player_head: color!(30, 20, 200),
         background: color!(60, 60, 60),
         currant_line: color!(68, 71, 90),
 
         cyan: color!(139, 233, 253),
 
         // orange: color!(255, 184, 108),
-        orange: Color {
-            r: 1.0,
-            g: 0.8,
-            b: 0.5,
-            a: 1.0,
-        },
+        orange: Color { r: 1.0, g: 0.8, b: 0.5, a: 1.0 },
         pink: color!(255, 121, 198),
         purple: color!(189, 147, 249),
         red: color!(255, 85, 85),
@@ -124,17 +116,11 @@ impl button::StyleSheet for PianoTheme {
             iced::Vector::new(0.0, 1.0)
         };
 
-        button::Appearance {
-            shadow_offset: active.shadow_offset + difference,
-            ..active
-        }
+        button::Appearance { shadow_offset: active.shadow_offset + difference, ..active }
     }
 
     fn pressed(&self, style: &Self::Style) -> button::Appearance {
-        button::Appearance {
-            shadow_offset: iced::Vector::default(),
-            ..self.active(style)
-        }
+        button::Appearance { shadow_offset: iced::Vector::default(), ..self.active(style) }
     }
 
     fn disabled(&self, style: &Self::Style) -> button::Appearance {
@@ -143,15 +129,11 @@ impl button::StyleSheet for PianoTheme {
         button::Appearance {
             shadow_offset: iced::Vector::default(),
             background: active.background.map(|background| match background {
-                iced::Background::Color(color) => iced::Background::Color(Color {
-                    a: color.a * 0.5,
-                    ..color
-                }),
+                iced::Background::Color(color) => {
+                    iced::Background::Color(Color { a: color.a * 0.5, ..color })
+                }
             }),
-            text_color: Color {
-                a: active.text_color.a * 0.5,
-                ..active.text_color
-            },
+            text_color: Color { a: active.text_color.a * 0.5, ..active.text_color },
             ..active
         }
     }
@@ -253,10 +235,7 @@ impl pane_grid::StyleSheet for PianoTheme {
     /// The [`Line`] to draw when a split is picked.
     fn picked_split(&self, style: &Self::Style) -> Option<pane_grid::Line> {
         match style {
-            Scrollable::Default => Some(pane_grid::Line {
-                width: 0.5,
-                color: self.orange,
-            }),
+            Scrollable::Default => Some(pane_grid::Line { width: 0.5, color: self.orange }),
             Scrollable::Custom(_) => None,
         }
     }
@@ -264,10 +243,7 @@ impl pane_grid::StyleSheet for PianoTheme {
     /// The [`Line`] to draw when a split is hovered.
     fn hovered_split(&self, style: &Self::Style) -> Option<pane_grid::Line> {
         match style {
-            Scrollable::Default => Some(pane_grid::Line {
-                width: 0.5,
-                color: self.orange,
-            }),
+            Scrollable::Default => Some(pane_grid::Line { width: 0.5, color: self.orange }),
             Scrollable::Custom(_) => None,
         }
     }

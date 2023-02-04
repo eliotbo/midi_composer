@@ -15,7 +15,7 @@ use iced::widget::{
 use iced::window;
 
 use iced::alignment;
-use iced::{Application, Command, Length, Settings, Subscription};
+use iced::{Application, Command, Length, Settings, Subscription, Vector};
 use iced_native::Event;
 
 pub use iced_native;
@@ -35,8 +35,8 @@ pub mod util;
 mod config;
 
 use crate::config::INIT_GRID_SIZE;
-use crate::util::{Action, History, TrackId};
-
+use crate::note::midi_notes::{MidiNote, MidiNotes};
+use crate::util::{Action, ClipBoard, History, TrackId};
 use std::collections::HashMap;
 
 // TODO: OMGOMGOMGOMGOM
@@ -64,11 +64,19 @@ pub fn main() -> iced::Result {
     })
 }
 
+enum ActiveElement {
+    Track(TrackId),
+    None,
+}
+
 struct MidiEditor {
     history: History,
     tracks: HashMap<TrackId, Track>,
     track_order: Vec<TrackId>,
     debug_text: String,
+    active_element: ActiveElement,
+    main_player_head: f32,
+    clipboard: ClipBoard,
     _timein_info: TimingInfo,
     _selection: Selected,
 }
@@ -81,15 +89,19 @@ impl Default for MidiEditor {
 
         let track0 = tracks.get_mut(&0).unwrap();
         track0.is_active = true;
+
         // let mut history = History::default();
         // println!("history.is_dummy: {}", history.is_dummy);
         // history.is_dummy = false;
 
         Self {
             history: History::default(),
-            tracks,               // vec![Track::new(0), Track::new(1)],
+            tracks, // vec![Track::new(0), Track::new(1)],
+            main_player_head: 3.0,
             track_order: vec![0], //vec![0, 1],
             debug_text: "debug".to_string(),
+            active_element: ActiveElement::Track(0),
+            clipboard: ClipBoard::None,
             _timein_info: TimingInfo::default(),
             _selection: Selected { _track_number: 0, _note_number: 0 },
         }
@@ -113,6 +125,80 @@ enum EditorMessage {
 }
 
 impl MidiEditor {
+    fn handle_copy(&mut self) -> Command<EditorMessage> {
+        match self.active_element {
+            ActiveElement::Track(track_id) => {
+                if let Some(track) = self.tracks.get_mut(&track_id) {
+                    if track.selected.notes.number_of_notes > 0 {
+                        self.clipboard = ClipBoard::Notes {
+                            notes: track.selected.notes.clone(),
+                            player_head: track.player_head,
+                        };
+                    }
+                } else {
+                    println!("Called non-existent track id: {}", track_id);
+                }
+
+                Command::none()
+            }
+            _ => Command::none(),
+        }
+    }
+
+    fn handle_cut(&mut self) -> Command<EditorMessage> {
+        match self.active_element {
+            ActiveElement::Track(track_id) => {
+                if let Some(track) = self.tracks.get_mut(&track_id) {
+                    if track.selected.notes.number_of_notes > 0 {
+                        self.clipboard = ClipBoard::Notes {
+                            notes: track.selected.notes.clone(),
+                            player_head: track.player_head,
+                        };
+                        track.update(&TrackMessage::DeleteSelectedNotes, &mut self.history);
+                    }
+                } else {
+                    println!("Called non-existent track id: {}", track_id);
+                }
+
+                Command::none()
+            }
+            _ => Command::none(),
+        }
+    }
+
+    fn handle_paste(&mut self) -> Command<EditorMessage> {
+        match self.active_element {
+            ActiveElement::Track(track_id) => {
+                if let Some(track) = self.tracks.get_mut(&track_id) {
+                    //
+                    if let ClipBoard::Notes { notes, player_head } = &self.clipboard {
+                        if track.selected.notes.number_of_notes > 0 {
+                            track.update(&TrackMessage::DeleteSelectedNotes, &mut self.history);
+                        }
+
+                        let minimum_time = notes.start_time;
+                        // let delta_player_head = track.player_head - *player_head;
+                        let delta_player_head = track.player_head - minimum_time;
+                        let drag = Vector::new(delta_player_head, 0.0);
+
+                        let mut notes = notes.clone();
+                        notes.drag_all_notes(drag, &track.grid);
+
+                        track.update(
+                            &TrackMessage::AddManyNotes { notes: notes.clone() },
+                            &mut self.history,
+                        );
+                    }
+                } else {
+                    println!("Called non-existent track id: {}", track_id);
+                }
+
+                Command::none()
+            }
+            _ => Command::none(),
+        }
+    }
+
     fn handle_undo(&mut self) -> Command<EditorMessage> {
         if let Some(action) = self.history.undo() {
             match action {
@@ -204,6 +290,24 @@ impl Application for MidiEditor {
                     self.handle_undo()
                 }
 
+                Event::Keyboard(keyboard::Event::KeyPressed { modifiers, key_code })
+                    if modifiers.command() && key_code == keyboard::KeyCode::C =>
+                {
+                    println!("Copying");
+                    self.handle_copy()
+                }
+                Event::Keyboard(keyboard::Event::KeyPressed { modifiers, key_code })
+                    if modifiers.command() && key_code == keyboard::KeyCode::X =>
+                {
+                    println!("Cutting");
+                    self.handle_cut()
+                }
+                Event::Keyboard(keyboard::Event::KeyPressed { modifiers, key_code })
+                    if modifiers.command() && key_code == keyboard::KeyCode::V =>
+                {
+                    println!("Pasting");
+                    self.handle_paste()
+                }
                 // Event::Keyboard(keyboard::Event::KeyPressed { modifiers, key_code })
                 //     if key_code == keyboard::KeyCode::B =>
                 // {

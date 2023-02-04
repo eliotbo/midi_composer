@@ -6,7 +6,7 @@ pub use iced_native;
 use iced::widget::canvas::event::{self, Event};
 
 use iced::widget::canvas::{self};
-use iced::widget::canvas::{Cache, Canvas, Cursor, Geometry};
+use iced::widget::canvas::{Cache, Canvas, Cursor, Geometry, Path, Stroke};
 use iced::{
     keyboard::{self, Modifiers},
     mouse, Color, Length, Point, Rectangle, Size, Vector,
@@ -42,6 +42,7 @@ pub struct Track {
     grid_cache: Cache,
     selection_square_cache: Cache,
     selected_notes_cache: Cache,
+    player_head_cache: Cache,
     pub selected: Selected,
     pub midi_notes: MidiNotes,
     pub grid: Grid,
@@ -53,6 +54,8 @@ pub struct Track {
     pub last_cursor_delta: Vector,
     pub last_delta_time: f32,
     pub drag: Drag,
+    pub player_head: f32,
+
     interaction: Interaction,
 
     track_history: TrackHistory,
@@ -88,6 +91,7 @@ impl Track {
             notes_cache: Cache::default(),
             selection_square_cache: Cache::default(),
             selected_notes_cache: Cache::default(),
+            player_head_cache: Cache::default(),
             selected: Selected::default(),
             midi_notes,
             grid: Grid::default(),
@@ -101,11 +105,33 @@ impl Track {
             drag: Drag::default(),
             track_history: TrackHistory::default(),
             interaction: Interaction::default(),
+            player_head: 3.0,
         }
     }
 
     pub fn view(&self) -> TrackElement {
         Canvas::new(self).width(Length::Fill).height(Length::Fill).into()
+    }
+
+    pub fn draw_player_head(&self, bounds: Rectangle, grid: &Grid, theme: &PianoTheme) -> Geometry {
+        let player_head_geometry = self.player_head_cache.draw(bounds.size(), |frame| {
+            grid.adjust_frame(frame, &bounds.size());
+            let region = grid.visible_region(frame.size());
+
+            let player_head_x = self.player_head;
+
+            let player_head_color = theme.player_head;
+
+            let player_head_line = Path::line(
+                Point::new(player_head_x, region.y),
+                Point::new(player_head_x, region.y - region.height),
+            );
+
+            let stroke = Stroke::default().with_width(1.0).with_color(player_head_color);
+
+            frame.stroke(&player_head_line, stroke);
+        });
+        player_head_geometry
     }
 
     pub fn remove_notes_with_conflicts(
@@ -115,7 +141,7 @@ impl Track {
         let added_notes2 = &mut added_notes.clone();
         added_notes2
             .sort_by(|a, b| b.note_index_after.time_index.cmp(&a.note_index_after.time_index));
-        added_notes2.reverse();
+        // added_notes2.reverse();
 
         let mut removed_notes: MidiNotes = MidiNotes::new();
         for crate::track::actions::AddedNote {
@@ -169,10 +195,6 @@ impl Track {
         }
     }
 
-    fn handle_canvas_event(&mut self, event: &Event, history: &mut History) {
-        //
-    }
-
     pub fn update(&mut self, message: &TrackMessage, history: &mut History) {
         let message = message.clone();
         match message {
@@ -199,6 +221,7 @@ impl Track {
                 self.notes_cache.clear();
                 self.grid_cache.clear();
                 self.selected_notes_cache.clear();
+                self.player_head_cache.clear();
             }
 
             TrackMessage::Scaled { scaling, translation } => {
@@ -211,6 +234,7 @@ impl Track {
                 self.notes_cache.clear();
                 self.grid_cache.clear();
                 self.selected_notes_cache.clear();
+                self.player_head_cache.clear();
             }
             // TrackMessage::LeftClick => {
             //     self.notes_cache.clear();
@@ -423,6 +447,7 @@ impl Track {
             }
 
             m @ TrackMessage::AddNote { .. } => {
+                println!("Add Note");
                 self.add_note(&m, history);
             }
 
@@ -765,9 +790,24 @@ impl Track {
                 return None;
             }
 
-            match &mut self.interaction.note_interaction {
+            match &self.interaction.note_interaction {
                 NoteInteraction::Resizing { .. } => {
                     return Some(self.handle_resizing(music_scale_cursor));
+                }
+                NoteInteraction::EitherSelectingOrSettingPlayerHead { initial_music_cursor } => {
+                    let cursor_delta = music_scale_cursor - *initial_music_cursor;
+
+                    // TODO: make this scale independent
+                    if cursor_delta.x.abs() > 0.1 {
+                        self.interaction.note_interaction = NoteInteraction::Selecting {
+                            initial_music_cursor: *initial_music_cursor,
+                            initial_cursor_proj: projected_cursor,
+                        };
+                        return Some((event::Status::Captured, None));
+                        // return Some(self.handle_selecting(projected_cursor, music_scale_cursor));
+                    } else {
+                        return None;
+                    }
                 }
                 NoteInteraction::Selecting { .. } => {
                     return Some(self.handle_selecting(projected_cursor, music_scale_cursor));
@@ -971,6 +1011,30 @@ impl Track {
         return None;
     }
 
+    fn change_player_head(
+        &mut self,
+        event: Event,
+        music_scale_cursor: Point,
+    ) -> Option<(event::Status, Option<TrackMessage>)> {
+        if let Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) = event {
+            //
+            // println!("blah");
+            match self.interaction.note_interaction {
+                //
+                NoteInteraction::EitherSelectingOrSettingPlayerHead { .. } => {
+                    // println!("blah1");
+                    self.player_head = music_scale_cursor.x;
+                    println!("player head: {}", self.player_head);
+                    self.interaction.note_interaction = NoteInteraction::None;
+                    self.player_head_cache.clear();
+                    return Some((event::Status::Captured, None));
+                }
+                _ => return None,
+            }
+        }
+        return None;
+    }
+
     fn change_notes(
         &mut self,
         event: Event,
@@ -992,13 +1056,17 @@ impl Track {
 
         if let Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) = event {
             //
-            // println!("blah");
+            //
             match self.interaction.note_interaction {
                 NoteInteraction::Writing { .. } => {
                     self.interaction.note_interaction =
                         NoteInteraction::Writing { writing_mode: WritingMode::None };
                 }
                 //
+                NoteInteraction::EitherSelectingOrSettingPlayerHead { .. } => {
+                    self.player_head = music_scale_cursor.x;
+                    self.interaction.note_interaction = NoteInteraction::None;
+                }
                 NoteInteraction::Selecting { initial_music_cursor, .. } => {
                     // println!("blah2");
                     let delta_cursor_pos = music_scale_cursor - initial_music_cursor;
@@ -1169,21 +1237,22 @@ impl Track {
         return None;
     }
 
-    fn init_selecting(
+    fn left_click(
         &mut self,
         event: Event,
 
-        projected_cursor: Point,
+        // projected_cursor: Point,
         music_scale_cursor: Point,
     ) -> Option<(event::Status, Option<TrackMessage>)> {
         // TODO change the resize note rectangle
         //
         if let Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) = event {
             // if no note has been clicked, start selecting
-            self.interaction.note_interaction = NoteInteraction::Selecting {
-                initial_music_cursor: music_scale_cursor,
-                initial_cursor_proj: projected_cursor,
-            };
+
+            self.interaction.note_interaction =
+                NoteInteraction::EitherSelectingOrSettingPlayerHead {
+                    initial_music_cursor: music_scale_cursor,
+                };
 
             // if the control key is not pressed, clear the Selected notes
             if !self.modifiers.control() {
@@ -1279,6 +1348,14 @@ impl Track {
         }
 
         // potential effects on notes: delete selected using Delete key, resize, or drag using mouse
+        if let Some(msg) = self.change_player_head(event, music_scale_cursor) {
+            if let Some(msg) = msg.1 {
+                self.update(&msg, history);
+            }
+            return ();
+        }
+
+        // potential effects on notes: delete selected using Delete key, resize, or drag using mouse
         if let Some(msg) = self.change_notes(event, music_scale_cursor) {
             if let Some(msg) = msg.1 {
                 self.update(&msg, history);
@@ -1294,8 +1371,8 @@ impl Track {
             return ();
         }
 
-        // If all else fails, try to start a selecting box
-        if let Some(msg) = self.init_selecting(event, projected_cursor, music_scale_cursor) {
+        // If all else fails, EitherSelectingOrSettingPlayerHead
+        if let Some(msg) = self.left_click(event, music_scale_cursor) {
             // println!("pending 4: {:?}", "a");
             if let Some(msg) = msg.1 {
                 self.update(&msg, history);
@@ -1339,6 +1416,8 @@ pub enum TrackMessage {
     Undo,
     Redo,
 
+    // Cut,
+    // Paste,
     Canvas { event: Event, bounds: Rectangle, cursor: Cursor },
 }
 
@@ -1462,7 +1541,7 @@ impl canvas::Program<TrackMessage, PianoTheme> for Track {
     fn draw(
         &self,
         _track_state: &Interaction,
-        _theme: &PianoTheme,
+        theme: &PianoTheme,
         bounds: Rectangle,
         cursor: Cursor,
     ) -> Vec<Geometry> {
@@ -1495,7 +1574,16 @@ impl canvas::Program<TrackMessage, PianoTheme> for Track {
         let selecting_box =
             self.selected.draw_selecting_square(bounds, &self.grid, &self.selection_square_cache);
 
-        vec![background, notes_overlay, selected_notes_elements, selecting_box, text_overlay]
+        let player_head = self.draw_player_head(bounds, &self.grid, &theme);
+
+        vec![
+            background,
+            notes_overlay,
+            selected_notes_elements,
+            selecting_box,
+            text_overlay,
+            player_head,
+        ]
     }
 
     fn mouse_interaction(

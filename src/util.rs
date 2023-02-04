@@ -51,6 +51,7 @@ pub enum Action {
 }
 
 #[allow(dead_code)]
-struct ClipBoard {
-    notes: MidiNotes,
+pub enum ClipBoard {
+    Notes { notes: MidiNotes, player_head: f32 },
+    None,
 }

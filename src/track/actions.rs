@@ -209,6 +209,7 @@ impl TrackAction {
             TrackAction::AddManyNotes { added_notes, .. } => {
                 track.remove_notes_with_conflicts(added_notes);
                 track.notes_cache.clear();
+                track.selected_notes_cache.clear();
             }
 
             TrackAction::RemoveNote { note_before, is_selected, .. } => {

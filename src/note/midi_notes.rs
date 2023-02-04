@@ -1205,6 +1205,7 @@ pub enum NoteInteraction {
 
     Resizing { initial_cursor_pos: Point, original_notes: MidiNotes, resize_end: NoteEdge },
     ResizingHover,
+    EitherSelectingOrSettingPlayerHead { initial_music_cursor: Point },
     Selecting { initial_music_cursor: Point, initial_cursor_proj: Point },
     Writing { writing_mode: WritingMode }, // adding notes if mouse is pressed
 }

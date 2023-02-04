@@ -161,13 +161,17 @@ impl Track {
     // adds a note to the MidiNotes, and checks for the necessary sideeffect
     pub fn add_note(&mut self, message: &TrackMessage, history: &mut History) {
         if let TrackMessage::AddNote { note, add_mode } = message {
-            if let AddMode::Drain = add_mode {
-                self.update(
-                    &TrackMessage::UpdateSelection {
-                        change_selection: ChangeSelection::DrainSelect,
-                    },
-                    history,
-                );
+            match add_mode {
+                AddMode::Drain | AddMode::Custom => {
+                    self.update(
+                        &TrackMessage::UpdateSelection {
+                            change_selection: ChangeSelection::DrainSelect,
+                        },
+                        history,
+                    );
+                }
+
+                _ => {}
             }
 
             let conflicts = self.midi_notes.resolve_conflicts_single(&note);
@@ -175,13 +179,6 @@ impl Track {
             self.notes_cache.clear();
 
             let added_note = self.selected.notes.add(&note);
-
-            // if !added_note.conflicts_with_selected.deleted.is_empty() {
-            //     println!(
-            //         "deleted selected notes: {:?}",
-            //         added_note.conflicts_with_selected.deleted
-            //     );
-            // }
 
             // println!("added note: {:?}", added_note);
             if !history.is_dummy {
@@ -406,7 +403,7 @@ impl Track {
                 self.selected_notes_cache.clear();
             }
 
-            TrackMessage::FinishResizingNote { delta_time, resize_end } => {
+            TrackMessage::FinishResizingNotes { delta_time, resize_end } => {
                 let resized_conflicts = self.selected.notes.resolve_self_resize_conflicts();
                 let conflicts = self.midi_notes.resolve_conflicts(&self.selected.notes);
                 self.selected_notes_cache.clear();
@@ -419,7 +416,7 @@ impl Track {
                         // resize_end,
                         resized_conflicts,
                         conflicts,
-                        message: TrackMessage::FinishResizingNote { delta_time, resize_end },
+                        message: TrackMessage::FinishResizingNotes { delta_time, resize_end },
                     });
                 }
             }
@@ -447,7 +444,6 @@ impl Track {
             }
 
             m @ TrackMessage::AddNote { .. } => {
-                println!("Add Note");
                 self.add_note(&m, history);
             }
 
@@ -677,6 +673,7 @@ impl Track {
             if cursor_delta.x == self.last_delta_time {
                 return (event::Status::Ignored, None);
             }
+            println!("resized: {}", cursor_delta.x);
 
             return (
                 event::Status::Captured,
@@ -918,8 +915,10 @@ impl Track {
             // println!("writing mode: {:?}", &self);
 
             let pitch = Pitch(music_scale_cursor.y.floor() as i16);
-            let start = music_scale_cursor.x.floor();
-            let end = start + 1.0;
+
+            let period = self.grid.beat_fraction;
+            let start = music_scale_cursor.x;
+            let end = start + period;
 
             let note = MidiNote::new(start, end, pitch);
 
@@ -934,8 +933,10 @@ impl Track {
             // println!("writing mode: {:?}", &self);
 
             let pitch = Pitch(music_scale_cursor.y.floor() as i16);
-            let start = music_scale_cursor.x.floor();
-            let end = start + 1.0; // TODO: implement beat fraction
+
+            let period = self.grid.beat_fraction;
+            let start = (music_scale_cursor.x / period).floor() * period;
+            let end = start + period;
 
             let note = MidiNote::new(start, end, pitch);
 
@@ -1058,6 +1059,20 @@ impl Track {
             //
             //
             match self.interaction.note_interaction {
+                NoteInteraction::Writing {
+                    writing_mode: WritingMode::CustomWriting(init_cursor),
+                } => {
+                    self.interaction.note_interaction = NoteInteraction::None;
+                    let delta_time = music_scale_cursor.x - init_cursor.x;
+
+                    return Some((
+                        event::Status::Captured,
+                        Some(TrackMessage::FinishResizingNotes {
+                            delta_time,
+                            resize_end: NoteEdge::End,
+                        }),
+                    ));
+                }
                 NoteInteraction::Writing { .. } => {
                     self.interaction.note_interaction =
                         NoteInteraction::Writing { writing_mode: WritingMode::None };
@@ -1110,7 +1125,7 @@ impl Track {
 
                     return Some((
                         event::Status::Captured,
-                        Some(TrackMessage::FinishResizingNote { delta_time, resize_end }),
+                        Some(TrackMessage::FinishResizingNotes { delta_time, resize_end }),
                     ));
                 }
 
@@ -1169,8 +1184,9 @@ impl Track {
                 // println!("new notes");
 
                 let pitch = Pitch(music_scale_cursor.y.floor() as i16);
-                let start = music_scale_cursor.x.floor();
-                let end = start + 1.0; // TODO: fractional beat lengths
+                let period = self.grid.beat_fraction;
+                let start = (music_scale_cursor.x / period).floor() * period;
+                let end = start + period;
                 let tiny = 1e-7;
 
                 let note = MidiNote::new(start + tiny, end - tiny, pitch);
@@ -1185,15 +1201,19 @@ impl Track {
             // The length of the note should be decided when the cursor left button is released.
             NoteInteraction::Writing { writing_mode: WritingMode::CustomWriting(init_cursor) } => {
                 let pitch = Pitch(music_scale_cursor.y.floor() as i16);
-                let start = music_scale_cursor.x.floor();
+                // let start = music_scale_cursor.x.floor();
+                let period = self.grid.beat_fraction;
+                let start = init_cursor.x;
                 // let note_length = music_scale_cursor.x - init_cursor.x;
-                // let end = start + note_length;
+                let end = start + period;
 
-                let note = MidiNote::new(start, start, pitch);
+                let note = MidiNote::new(start, end, pitch);
                 let mut notes = MidiNotes::new();
                 notes.add(&note);
 
                 let delta_time = music_scale_cursor.x - init_cursor.x;
+
+                println!("here");
 
                 return Some((
                     event::Status::Captured,
@@ -1385,7 +1405,7 @@ impl Track {
 #[derive(Clone, Debug, Copy)]
 pub enum AddMode {
     Drain,
-    Custom,
+    Custom, // keep selected?
     Normal,
 }
 
@@ -1403,7 +1423,7 @@ pub enum TrackMessage {
     FinishDragging { drag: Drag, scale: Scale },
 
     ResizedNotes { delta_time: f32, original_notes: MidiNotes, resize_end: NoteEdge },
-    FinishResizingNote { delta_time: f32, resize_end: NoteEdge },
+    FinishResizingNotes { delta_time: f32, resize_end: NoteEdge },
 
     Selecting { selecting_square: Rectangle, direct_selecting_square: Rectangle },
     // FinishSelecting {

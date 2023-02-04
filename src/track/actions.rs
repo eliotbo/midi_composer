@@ -250,7 +250,7 @@ impl TrackAction {
             }
 
             TrackAction::ResizedNotes {
-                message: TrackMessage::FinishResizingNote { delta_time, resize_end },
+                message: TrackMessage::FinishResizingNotes { delta_time, resize_end },
                 resized_conflicts,
                 conflicts,
             } => {
@@ -360,7 +360,7 @@ impl TrackAction {
             }
             TrackAction::ResizedNotes { message, .. } => {
                 // track.update(message, dummy_history)
-                if let TrackMessage::FinishResizingNote { delta_time, resize_end } = message {
+                if let TrackMessage::FinishResizingNotes { delta_time, resize_end } = message {
                     for notes_in_pitch in track.selected.notes.notes.iter_mut() {
                         for note in notes_in_pitch.iter_mut() {
                             note.resize(*resize_end, *delta_time);

@@ -284,6 +284,9 @@ impl MidiNotes {
         let time_index = self.find_time_index(note);
         let pitch = note.pitch.get() as usize;
         self.number_of_notes += 1;
+        if self.number_of_notes == 1 || note.start < self.start_time {
+            self.start_time = note.start;
+        }
 
         let added_note = AddedNote {
             note_index_after: NoteIndex { pitch_index: pitch, time_index: time_index as usize },

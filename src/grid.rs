@@ -17,6 +17,7 @@ pub struct Grid {
     pub scaling: Vector, // geometrical scale
     pub max_beats: usize,
     pub scale: Scale, // musical scale
+    pub beat_fraction: f32,
 }
 
 impl Default for Grid {
@@ -25,32 +26,28 @@ impl Default for Grid {
 
         Self {
             translation: Vector::new(
-                -INIT_GRID_SIZE.width / 2.0 - BEAT_SIZE,
-                // -1.0 * INIT_GRID_SIZE.height / 2.0 - NOTE_SIZE * 1.0,
+                -INIT_GRID_SIZE.width / 2.0 - BEAT_SIZE * 1.0,
                 -1.0 * INIT_GRID_SIZE.height / 2.0 - NOTE_SIZE * INIT_PITCH_POS,
             ),
             scaling: INIT_SCALING,
             max_beats: 100,
             scale,
+            beat_fraction: 1.0 / 2.0,
         }
     }
 }
 
 impl Grid {
-    // pub fn to_track_axes(&self, point: Point, size: &Size) -> Point {
-    //     let region = self.visible_region(*size);
-
-    //     let projection =
-    //         Point::new(point.x / self.scaling.x + region.x, point.y / self.scaling.y + region.y);
-
-    //     let x = projection.x / BEAT_SIZE as f32;
-    //     let y = 127.0 - projection.y / NOTE_SIZE as f32;
-
-    //     Point::new(x, y)
-    // }
-
-    // pub fn to_track_axes(&self, point: Point, region: &Region) -> Point {
-    // pub fn to_track_axes(&self, point: Point, size: &Size) -> Point {
+    pub fn increase_fraction(&mut self) {
+        if self.beat_fraction < 8.0 {
+            self.beat_fraction *= 2.0;
+        }
+    }
+    pub fn decrease_fraction(&mut self) {
+        if self.beat_fraction > 1.0 / 32.0 {
+            self.beat_fraction /= 2.0;
+        }
+    }
 
     pub fn to_track_axes(&self, point: Point, frame_size: &Size) -> Point {
         let region = self.visible_region(*frame_size);
@@ -70,16 +67,6 @@ impl Grid {
 
         cursor_normalized
     }
-
-    // // Takes in a point (ex: cursor position) and modifies it accodring to the music scale.
-    // // If the scale is chromatic, nothing changes, but if the scale is anything else, the
-    // // y value will skip over notes that are not in the scale.
-    // pub fn adjust_to_music_scale(&self, mut point: Point) -> Point {
-    //     let y_whole = point.y.floor();
-    //     let y_frac = point.y - y_whole;
-    //     point.y = self.scale.midi_range[y_whole as usize] as f32 + y_frac;
-    //     point
-    // }
 
     // Takes in a point (ex: cursor position) and modifies it accodring to the music scale.
     // If the scale is chromatic, nothing changes, but if the scale is anything else, the
@@ -171,6 +158,7 @@ impl Grid {
 
             for column in region.columns() {
                 let pos = Point::new(column as f32, *rows.start() as f32);
+                // println!("drawing colum1 {}", column);
                 frame.fill_rectangle(pos, Size::new(beat_linewidth, total_rows as f32), color);
 
                 if column as i32 % 2 == 1 {
@@ -197,9 +185,40 @@ impl Grid {
 
                 frame.fill_text(Text { content: format!("{:?}", column), ..beat_label });
             }
+
+            // add off beat lines when the grid has a non-unit beat fraction
+            for column in self.sub_columns(&region) {
+                // println!("drawing column2 {}", column);
+                let pos = Point::new(column as f32, *rows.start() as f32);
+
+                let color = Color::from_rgba8(70, 74, 83, 0.5);
+                frame.fill_rectangle(
+                    pos,
+                    Size::new(beat_linewidth * 0.75, total_rows as f32),
+                    color,
+                );
+            }
         });
 
         grid
+    }
+
+    // off beat
+    pub fn sub_columns(&self, region: &Region) -> Vec<f32> {
+        let period = self.beat_fraction * BEAT_SIZE;
+
+        let first_column = (region.x / period).floor() * self.beat_fraction;
+        let last_column = ((region.x + region.width) / period).ceil() * self.beat_fraction;
+
+        let num_columns = (last_column - first_column) / self.beat_fraction;
+        let mut columns = Vec::new();
+
+        for i in 0..(num_columns as usize) {
+            let column = first_column + i as f32 * self.beat_fraction;
+            columns.push(column);
+        }
+
+        columns
     }
 
     pub fn draw_text_and_hover_overlay(&self, bounds: Rectangle, cursor: Cursor) -> Geometry {
@@ -312,9 +331,7 @@ impl Cell {
         let i = (position.y / NOTE_SIZE as f32).ceil() as isize;
         // convert to note
         let note_name = NOTE_LABELS[((i - 1) as usize) % 12].to_string();
-
         let j = (position.x / BEAT_SIZE as f32).ceil() as isize;
-
         Cell { note_name, i: i.saturating_sub(1), j: j.saturating_sub(1) }
     }
 

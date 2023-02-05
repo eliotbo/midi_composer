@@ -12,6 +12,7 @@ use std::fmt;
 
 use super::scale::Scale;
 use crate::config::{BEAT_SIZE, NOTE_LABELS, RESIZE_BOX_PIXEL_WIDTH};
+use crate::piano_theme::TrackTheme;
 use crate::track::{AddMode, Pending, TrackMessage};
 
 use crate::track::actions::{AddedNote, ConflictHistory, DeletedNote, ResizedConflicts};
@@ -476,11 +477,23 @@ impl MidiNotes {
         bounds: &Rectangle,
         cursor: &Cursor,
         notes_cache: &Cache,
-        color: Color,
-        trans: f32,
+        // color: Color,
+        theme: &TrackTheme,
+        is_selected: bool,
+        hovering_selected: bool,
     ) -> Geometry {
         let notes = notes_cache.draw(bounds.size(), |frame| {
-            let mut color = color;
+
+
+            let mut color = if hovering_selected && is_selected {
+                let mut c = theme.selected_note;
+                c.a *= 0.5;
+                c
+            } else if is_selected{
+                theme.selected_note
+            } else {
+                theme.note
+            };
 
             grid.adjust_frame(frame, &bounds.size());
 
@@ -514,7 +527,9 @@ impl MidiNotes {
                     let pos = Point::new(note.start as f32, row as f32);
                     let note_len = note.end - note.start;
 
-
+                    if !is_selected {
+                        color = theme.note;
+                    } 
 
                     let pos2 = Point::new(note.start as f32, pitch_relative_to_grid as f32);
                     let note_rect = Rectangle::new(pos2, Size::new(note_len as f32, 1.0));
@@ -523,16 +538,19 @@ impl MidiNotes {
                     if let Some(projected_cursor) = maybe_projected_cursor {
 
                         let scale_adjusted_proj_cursor = grid.adjust_to_music_scale(projected_cursor);
-                        color.a = 1.0 * trans;
+                        // color.a = 1.0 * trans;
 
-                        // if note_rect.contains(scale_adjusted_proj_cursor) {
-                        //     color.a = 0.5 * trans;
-                        // } else {
-                        //     color.a = 1.0 * trans;
-                        // }
+                        if note_rect.contains(scale_adjusted_proj_cursor) && !is_selected {
+                            color.a *= 0.5 ;
+                        }
                     }
 
                     frame.fill_rectangle(pos, Size::new(note_len as f32, 1.0), color);
+
+                    frame.stroke(
+                        &Path::rectangle(pos, Size::new(note_len as f32, 1.0)),
+                        Stroke::default().with_width(0.8).with_color(theme.note_contour),
+                    );
 
                     // frame.fill_rectangle(pos, Size::new(total_columns as f32, 1.0), note_color);
 

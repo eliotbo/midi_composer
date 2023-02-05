@@ -21,46 +21,119 @@ macro_rules! color {
     };
 }
 
-pub struct PianoTheme {
-    text: Color,
+pub struct TrackTheme {
+    pub text: Color,
+    pub button: Color,
+    pub button_pressed: Color,
+
+    pub grid_background: Color,
+
+    pub grid_beat_line: Color,
+    pub grid_subbeat_line: Color,
+    pub grid_row_line: Color,
+
+    pub grid_piano_light_row: Color,
+    pub grid_piano_dark_row: Color,
+
+    pub grid_light_column: Color,
+    pub grid_dark_column: Color,
 
     pub piano_background: Color,
     pub background: Color,
     pub player_head: Color,
+
     currant_line: Color,
 
-    pub cyan: Color,
-
-    pub orange: Color,
+    pub track_contour: Color,
     pink: Color,
     purple: Color,
     red: Color,
     yellow: Color,
+
+    pub note: Color,
+    pub selected_note: Color,
+    pub note_contour: Color,
 }
 
-impl PianoTheme {
-    pub const NORMAL: Self = Self {
-        text: color!(120, 120, 120),
+impl TrackTheme {
+    pub fn x(c: Color, m: f32) -> Color {
+        Color { r: c.r * m, g: c.g * m, b: c.b * m, a: c.a }
+    }
 
-        piano_background: color!(30, 30, 33),
-        player_head: color!(30, 20, 200),
-        background: color!(60, 60, 60),
-        currant_line: color!(68, 71, 90),
+    pub fn xa(c: Color, m: f32) -> Color {
+        Color { r: c.r, g: c.g, b: c.b, a: c.a * m }
+    }
 
-        cyan: color!(139, 233, 253),
+    // // convert a rgb color to linear space
+    // pub fn to_linear(c: Color) -> Color {
+    //     Color { r: c.r.powf(2.2), g: c.g.powf(2.2), b: c.b.powf(2.2), a: c.a }
+    // }
 
-        // orange: color!(255, 184, 108),
-        orange: Color { r: 1.0, g: 0.8, b: 0.5, a: 1.0 },
-        pink: color!(255, 121, 198),
-        purple: color!(189, 147, 249),
-        red: color!(255, 85, 85),
-        yellow: color!(241, 250, 140),
-    };
+    // release TODO: make thid a const
+    pub fn get_fall() -> Self {
+        let solid_dark = Color::from_rgb8(44, 54, 57);
+        let solid_dark2 = Color::from_rgb8(63, 78, 79);
+
+        let alpha = 0.25;
+        let button = Color::from_rgba8(44, 54, 57, 1.0);
+        let button_pressed = Color::from_rgba8(44, 54, 57, 0.5);
+
+        let transparent_dark = Self::xa(solid_dark, alpha);
+        let transparent_dark2 = Self::xa(solid_dark2, alpha); // Color::from_rgba8(63, 78, 79, alpha);
+        let white_bg = Color::from_rgba8(220, 215, 201, alpha / 2.0);
+
+        let selected = Color::from_rgba8(162, 5, 92, 0.5);
+        let black = Color::from_rgb8(2, 5, 3);
+        let green = Color::from_rgb8(105, 130, 105);
+
+        let brown = Color::from_rgb8(162, 123, 92);
+        let red = Color::from_rgb8(170, 86, 86);
+        let beige = Color::from_rgb8(241, 219, 191);
+        let sand = Color::from_rgb8(185, 155, 107);
+
+        let ggg = 60;
+        let grey = Color::from_rgba8(10, ggg, ggg, 1.0);
+
+        Self {
+            text: color!(120, 120, 120),
+            button,
+            button_pressed,
+
+            grid_background: transparent_dark,
+
+            grid_beat_line: Self::x(transparent_dark2, 2.0),
+            grid_subbeat_line: Self::x(transparent_dark2, 1.5),
+            grid_row_line: Self::x(transparent_dark2, 1.1),
+
+            grid_light_column: white_bg,
+            grid_dark_column: Self::x(white_bg, 0.5),
+
+            grid_piano_light_row: Self::x(transparent_dark, 2.0),
+            grid_piano_dark_row: Self::x(transparent_dark, 0.8),
+
+            note: green,
+            selected_note: selected,
+            note_contour: grey,
+
+            piano_background: color!(30, 30, 33),
+            player_head: color!(30, 180, 200),
+
+            background: color!(60, 60, 60),
+            currant_line: color!(68, 71, 255),
+
+            track_contour: black,
+
+            pink: color!(255, 121, 198),
+            purple: color!(189, 147, 249),
+            red: color!(255, 85, 85),
+            yellow: color!(241, 250, 140),
+        }
+    }
 }
 
-impl Default for PianoTheme {
+impl Default for TrackTheme {
     fn default() -> Self {
-        Self::NORMAL
+        Self::get_fall()
     }
 }
 
@@ -70,7 +143,7 @@ pub enum Application {
     Default,
 }
 
-impl application::StyleSheet for PianoTheme {
+impl application::StyleSheet for TrackTheme {
     type Style = Application;
 
     fn appearance(&self, style: &Self::Style) -> application::Appearance {
@@ -90,7 +163,7 @@ pub enum Button {
     Black,
 }
 
-impl button::StyleSheet for PianoTheme {
+impl button::StyleSheet for TrackTheme {
     type Style = Button;
 
     fn active(&self, style: &Button) -> button::Appearance {
@@ -102,7 +175,7 @@ impl button::StyleSheet for PianoTheme {
         };
 
         match style {
-            Button::Yellow => auto_fill(self.yellow, self.text),
+            Button::Yellow => auto_fill(self.button, self.text),
             Button::Black => auto_fill(Color::BLACK, self.text),
         }
     }
@@ -120,7 +193,19 @@ impl button::StyleSheet for PianoTheme {
     }
 
     fn pressed(&self, style: &Self::Style) -> button::Appearance {
-        button::Appearance { shadow_offset: iced::Vector::default(), ..self.active(style) }
+        let auto_fill = |background: Color, text: Color| button::Appearance {
+            background: background.into(),
+            text_color: text,
+            border_radius: 2.0,
+            ..button::Appearance::default()
+        };
+
+        match style {
+            Button::Yellow => auto_fill(self.button_pressed, self.text),
+            Button::Black => auto_fill(Color::BLACK, self.text),
+        }
+
+        // button::Appearance { shadow_offset: iced::Vector::default(), ..self.active(style) }
     }
 
     fn disabled(&self, style: &Self::Style) -> button::Appearance {
@@ -147,16 +232,16 @@ pub enum Container {
     #[default]
     Transparent,
     Box,
-    Custom(fn(&PianoTheme) -> container::Appearance),
+    Custom(fn(&TrackTheme) -> container::Appearance),
 }
 
-impl From<fn(&PianoTheme) -> container::Appearance> for Container {
-    fn from(f: fn(&PianoTheme) -> container::Appearance) -> Self {
+impl From<fn(&TrackTheme) -> container::Appearance> for Container {
+    fn from(f: fn(&TrackTheme) -> container::Appearance) -> Self {
         Self::Custom(f)
     }
 }
 
-impl container::StyleSheet for PianoTheme {
+impl container::StyleSheet for TrackTheme {
     type Style = Container;
 
     fn appearance(&self, style: &Self::Style) -> container::Appearance {
@@ -167,7 +252,7 @@ impl container::StyleSheet for PianoTheme {
                 background: self.piano_background.into(),
                 border_radius: 2.0,
                 border_width: 3.0,
-                border_color: self.orange,
+                border_color: self.track_contour,
                 // border_color: Color {
                 //     r: 1.0,
                 //     g: 1.0,
@@ -188,7 +273,7 @@ pub enum Text {
     #[default]
     Default,
     Color(Color),
-    Custom(fn(&PianoTheme) -> text::Appearance),
+    Custom(fn(&TrackTheme) -> text::Appearance),
 }
 
 impl From<Color> for Text {
@@ -197,7 +282,7 @@ impl From<Color> for Text {
     }
 }
 
-impl text::StyleSheet for PianoTheme {
+impl text::StyleSheet for TrackTheme {
     type Style = Text;
 
     fn appearance(&self, style: Self::Style) -> text::Appearance {
@@ -216,7 +301,7 @@ pub enum Scrollable {
     #[default]
     Default,
     /// A custom style.
-    Custom(Box<dyn scrollable::StyleSheet<Style = PianoTheme>>),
+    Custom(Box<dyn scrollable::StyleSheet<Style = TrackTheme>>),
 }
 
 // #[derive(Debug, Clone, Copy, PartialEq)]
@@ -228,14 +313,14 @@ pub enum Scrollable {
 //     pub width: f32,
 // }
 
-impl pane_grid::StyleSheet for PianoTheme {
+impl pane_grid::StyleSheet for TrackTheme {
     /// The supported style of the [`StyleSheet`].
     type Style = Scrollable;
 
     /// The [`Line`] to draw when a split is picked.
     fn picked_split(&self, style: &Self::Style) -> Option<pane_grid::Line> {
         match style {
-            Scrollable::Default => Some(pane_grid::Line { width: 0.5, color: self.orange }),
+            Scrollable::Default => Some(pane_grid::Line { width: 0.5, color: self.track_contour }),
             Scrollable::Custom(_) => None,
         }
     }
@@ -243,13 +328,13 @@ impl pane_grid::StyleSheet for PianoTheme {
     /// The [`Line`] to draw when a split is hovered.
     fn hovered_split(&self, style: &Self::Style) -> Option<pane_grid::Line> {
         match style {
-            Scrollable::Default => Some(pane_grid::Line { width: 0.5, color: self.orange }),
+            Scrollable::Default => Some(pane_grid::Line { width: 0.5, color: self.track_contour }),
             Scrollable::Custom(_) => None,
         }
     }
 }
 
-impl iced::widget::rule::StyleSheet for PianoTheme {
+impl iced::widget::rule::StyleSheet for TrackTheme {
     type Style = Scrollable;
 
     fn appearance(&self, style: &Self::Style) -> rule::Appearance {
@@ -272,7 +357,7 @@ impl iced::widget::rule::StyleSheet for PianoTheme {
     }
 }
 
-impl iced_native::widget::scrollable::StyleSheet for PianoTheme {
+impl iced_native::widget::scrollable::StyleSheet for TrackTheme {
     type Style = Scrollable;
 
     fn active(&self, style: &Self::Style) -> scrollable::Scrollbar {
@@ -286,7 +371,7 @@ impl iced_native::widget::scrollable::StyleSheet for PianoTheme {
                     border_width: 0.0,
                     border_color: Color::TRANSPARENT,
                     scroller: scrollable::Scroller {
-                        color: self.orange.into(),
+                        color: self.track_contour.into(),
                         border_radius: 2.0,
                         border_width: 2.0,
                         border_color: self.red,
@@ -305,7 +390,7 @@ impl iced_native::widget::scrollable::StyleSheet for PianoTheme {
                 border_width: 0.0,
                 border_color: Color::TRANSPARENT,
                 scroller: scrollable::Scroller {
-                    color: self.orange.into(),
+                    color: self.track_contour.into(),
                     border_radius: 2.0,
                     border_width: 0.0,
                     border_color: self.purple,

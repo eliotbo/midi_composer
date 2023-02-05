@@ -7,6 +7,7 @@ use crate::config::{
     BEAT_SIZE, INIT_GRID_SIZE, INIT_PITCH_POS, INIT_SCALING, NOTE_LABELS, NOTE_SIZE,
 };
 use crate::note::scale::Scale;
+use crate::piano_theme::TrackTheme;
 
 pub const IS_WHITE_KEY: [bool; 12] =
     [true, false, true, false, true, true, false, true, false, true, false, true];
@@ -95,7 +96,12 @@ impl Grid {
         frame.scale(Vector::new(BEAT_SIZE, -NOTE_SIZE));
     }
 
-    pub fn draw_background(&self, bounds: Rectangle, grid_cache: &Cache) -> Geometry {
+    pub fn draw_background(
+        &self,
+        bounds: Rectangle,
+        grid_cache: &Cache,
+        theme: &TrackTheme,
+    ) -> Geometry {
         let grid = grid_cache.draw(bounds.size(), |frame| {
             self.adjust_frame(frame, &bounds.size());
 
@@ -108,7 +114,8 @@ impl Grid {
             let (total_rows, total_columns) = (rows.clone().count(), columns.clone().count());
             let beat_linewidth = 2.0 / BEAT_SIZE;
             let note_linewidth = 2.0 / NOTE_SIZE;
-            let color = Color::from_rgb8(70, 74, 83);
+            let color = Color::from_rgb8(255, 0, 0);
+            // let color =
 
             let text_size = 14.0;
 
@@ -117,13 +124,18 @@ impl Grid {
             for row in region.rows() {
                 let note_index = self.scale.midi_range[row as usize];
 
-                let pos = Point::new(*columns.start() as f32, row as f32);
-                frame.fill_rectangle(pos, Size::new(total_columns as f32, note_linewidth), color);
+                let pos = Point::new(*columns.start() as f32, row as f32 - note_linewidth / 2.0);
+                frame.fill_rectangle(
+                    pos,
+                    Size::new(total_columns as f32, note_linewidth),
+                    theme.grid_row_line,
+                    // color,
+                );
 
-                let mut note_color = Color::from_rgba8(100, 100, 100, alpha);
-
-                if !IS_WHITE_KEY[note_index as usize % 12] {
-                    note_color = Color::from_rgba8(10, 10, 10, alpha);
+                let note_color = if IS_WHITE_KEY[note_index as usize % 12] {
+                    theme.grid_piano_light_row
+                } else {
+                    theme.grid_piano_dark_row
                 };
 
                 frame.fill_rectangle(pos, Size::new(total_columns as f32, 1.0), note_color);
@@ -136,7 +148,7 @@ impl Grid {
                     );
 
                     let note_label = Text {
-                        color: Color::WHITE,
+                        color: theme.text,
                         size: text_size,
                         position: text_pos,
                         horizontal_alignment: alignment::Horizontal::Left,
@@ -157,15 +169,19 @@ impl Grid {
             }
 
             for column in region.columns() {
-                let pos = Point::new(column as f32, *rows.start() as f32);
-                // println!("drawing colum1 {}", column);
-                frame.fill_rectangle(pos, Size::new(beat_linewidth, total_rows as f32), color);
+                let pos = Point::new(column as f32 - beat_linewidth / 2.0, *rows.start() as f32);
+
+                frame.fill_rectangle(
+                    pos,
+                    Size::new(beat_linewidth, total_rows as f32),
+                    theme.grid_beat_line,
+                );
 
                 if column as i32 % 2 == 1 {
                     frame.fill_rectangle(
                         pos,
                         Size::new(1.0, total_rows as f32),
-                        Color::from_rgba8(100, 74, 83, alpha),
+                        theme.grid_dark_column, // Color::from_rgba8(100, 74, 83, alpha),
                     );
                 }
 
@@ -175,7 +191,7 @@ impl Grid {
                 );
 
                 let beat_label = Text {
-                    color: Color::WHITE,
+                    color: theme.text,
                     size: text_size,
                     position: text_pos,
                     horizontal_alignment: alignment::Horizontal::Left,
@@ -188,14 +204,17 @@ impl Grid {
 
             // add off beat lines when the grid has a non-unit beat fraction
             for column in self.sub_columns(&region) {
-                // println!("drawing column2 {}", column);
+                // println!("column: {:?}", column);
+                if column.abs() % 1.0 < 0.0001 {
+                    println!("continue");
+                    continue;
+                }
                 let pos = Point::new(column as f32, *rows.start() as f32);
 
-                let color = Color::from_rgba8(70, 74, 83, 0.5);
                 frame.fill_rectangle(
                     pos,
-                    Size::new(beat_linewidth * 0.75, total_rows as f32),
-                    color,
+                    Size::new(beat_linewidth * 0.5, total_rows as f32),
+                    theme.grid_subbeat_line,
                 );
             }
         });
@@ -221,7 +240,12 @@ impl Grid {
         columns
     }
 
-    pub fn draw_text_and_hover_overlay(&self, bounds: Rectangle, cursor: Cursor) -> Geometry {
+    pub fn draw_text_and_hover_overlay(
+        &self,
+        bounds: Rectangle,
+        cursor: Cursor,
+        theme: &TrackTheme,
+    ) -> Geometry {
         let overlay = {
             let mut frame = Frame::new(bounds.size());
 

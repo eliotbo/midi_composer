@@ -21,7 +21,7 @@ use iced_native::Event;
 pub use iced_native;
 
 pub mod piano_theme;
-pub use piano_theme::PianoTheme;
+pub use piano_theme::TrackTheme;
 
 pub mod track;
 use track::{TimingInfo, Track, TrackMessage};
@@ -245,11 +245,11 @@ impl MidiEditor {
     }
 }
 
-type EditorElement<'a> = iced::Element<'a, EditorMessage, iced::Renderer<PianoTheme>>;
+type EditorElement<'a> = iced::Element<'a, EditorMessage, iced::Renderer<TrackTheme>>;
 
 impl Application for MidiEditor {
     type Message = EditorMessage;
-    type Theme = PianoTheme;
+    type Theme = TrackTheme;
     type Executor = executor::Default;
     type Flags = ();
 
@@ -384,7 +384,7 @@ impl Application for MidiEditor {
             .into()
     }
 
-    fn theme(&self) -> PianoTheme {
-        PianoTheme::NORMAL
+    fn theme(&self) -> TrackTheme {
+        TrackTheme::get_fall()
     }
 }

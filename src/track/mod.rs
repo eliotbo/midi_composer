@@ -18,13 +18,13 @@ use crate::note::midi_notes::{
     Selected, WritingMode,
 };
 use crate::note::scale::{Scale, ScaleType};
-use crate::piano_theme::PianoTheme;
+use crate::piano_theme::TrackTheme;
 
 use crate::config::{MAX_SCALING, MIN_SCALING};
 use crate::track::actions::{SelectionAction, TrackAction, TrackHistory};
 use crate::util::{History, TrackId};
 
-pub type TrackElement<'a> = iced::Element<'a, TrackMessage, iced::Renderer<PianoTheme>>;
+pub type TrackElement<'a> = iced::Element<'a, TrackMessage, iced::Renderer<TrackTheme>>;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Drag {
@@ -55,6 +55,7 @@ pub struct Track {
     pub last_delta_time: f32,
     pub drag: Drag,
     pub player_head: f32,
+    pub hovering_selected: bool,
 
     interaction: Interaction,
 
@@ -106,6 +107,7 @@ impl Track {
             track_history: TrackHistory::default(),
             interaction: Interaction::default(),
             player_head: 3.0,
+            hovering_selected: false,
         }
     }
 
@@ -113,7 +115,7 @@ impl Track {
         Canvas::new(self).width(Length::Fill).height(Length::Fill).into()
     }
 
-    pub fn draw_player_head(&self, bounds: Rectangle, grid: &Grid, theme: &PianoTheme) -> Geometry {
+    pub fn draw_player_head(&self, bounds: Rectangle, grid: &Grid, theme: &TrackTheme) -> Geometry {
         let player_head_geometry = self.player_head_cache.draw(bounds.size(), |frame| {
             grid.adjust_frame(frame, &bounds.size());
             let region = grid.visible_region(frame.size());
@@ -783,6 +785,20 @@ impl Track {
         if let Event::Mouse(mouse::Event::CursorMoved { .. }) = event {
             //
             //
+
+            let mut over_note =
+                self.selected.notes.get_note_under_cursor(&self.grid, music_scale_cursor);
+
+            if let None = over_note {
+                over_note = self.midi_notes.get_note_under_cursor(&self.grid, music_scale_cursor);
+                self.hovering_selected = false;
+            } else {
+                self.hovering_selected = true;
+            }
+
+            self.notes_cache.clear();
+            self.selected_notes_cache.clear();
+
             if let NoteInteraction::Writing { .. } = self.interaction.note_interaction {
                 return None;
             }
@@ -815,13 +831,6 @@ impl Track {
 
                 _ => {}
             };
-
-            let mut over_note =
-                self.selected.notes.get_note_under_cursor(&self.grid, music_scale_cursor);
-
-            if let None = over_note {
-                over_note = self.midi_notes.get_note_under_cursor(&self.grid, music_scale_cursor);
-            }
 
             // check if the mouse is over a note or the edge of a note
             match over_note {
@@ -1213,8 +1222,6 @@ impl Track {
 
                 let delta_time = music_scale_cursor.x - init_cursor.x;
 
-                println!("here");
-
                 return Some((
                     event::Status::Captured,
                     Some(TrackMessage::ResizedNotes {
@@ -1491,12 +1498,12 @@ impl Interaction {
     }
 }
 
-impl canvas::Program<TrackMessage, PianoTheme> for Track {
+impl canvas::Program<TrackMessage, TrackTheme> for Track {
     type State = Interaction;
 
     fn update(
         &self,
-        _track_state: &mut Interaction,
+        track_state: &mut Interaction,
         event: Event,
         bounds: Rectangle,
         cursor: Cursor,
@@ -1543,43 +1550,87 @@ impl canvas::Program<TrackMessage, PianoTheme> for Track {
                 key_code: keyboard::KeyCode::B,
                 ..
             }) => {
+                track_state.note_interaction.toggle_write_mode();
+                // track_state.note_interaction =
+                //     NoteInteraction::Writing { writing_mode: WritingMode::BeatFraction };
+
                 return (
                     event::Status::Captured,
                     Some(TrackMessage::Canvas { event, bounds, cursor }),
-                )
+                );
             }
 
             Event::Keyboard(_) => {
                 return (event::Status::Ignored, None);
             }
+
             _ => {}
+        }
+
+        if let Event::Mouse(mouse::Event::CursorMoved { .. }) = event {
+            if cursor.is_over(&bounds) {
+                let projected_cursor = self.grid.to_track_axes(cursor_position, &bounds.size());
+                let music_scale_cursor = self.grid.adjust_to_music_scale(projected_cursor);
+
+                let mut resize_mouse_style = false;
+
+                match self.selected.notes.get_note_under_cursor(&self.grid, music_scale_cursor) {
+                    Some(OverNote { note_index: _, note_edge: NoteEdge::Start })
+                    | Some(OverNote { note_index: _, note_edge: NoteEdge::End }) => {
+                        track_state.note_interaction = NoteInteraction::ResizingHover;
+                        resize_mouse_style = true;
+                    }
+                    _ => {}
+                }
+
+                match self.midi_notes.get_note_under_cursor(&self.grid, music_scale_cursor) {
+                    Some(OverNote { note_index: _, note_edge: NoteEdge::Start })
+                    | Some(OverNote { note_index: _, note_edge: NoteEdge::End }) => {
+                        track_state.note_interaction = NoteInteraction::ResizingHover;
+                        resize_mouse_style = true;
+                    }
+                    _ => {}
+                }
+
+                if !resize_mouse_style {
+                    track_state.note_interaction = NoteInteraction::None;
+                }
+            }
         }
 
         return (event::Status::Captured, Some(TrackMessage::Canvas { event, bounds, cursor }));
     }
 
+    // else if let Some(OverNote {
+    //     note_index: _,
+    //     note_edge: NoteEdge::Start,
+    // }) = self
+    //     .midi_notes
+    //     .get_note_under_cursor(&self.grid, music_scale_cursor)
+    // {
+    //     track_state.note_interaction = NoteInteraction::ResizingHover;
+    // } else {
+    //     track_state.note_interaction = NoteInteraction::None;
+    // }
+
     fn draw(
         &self,
         _track_state: &Interaction,
-        theme: &PianoTheme,
+        theme: &TrackTheme,
         bounds: Rectangle,
         cursor: Cursor,
     ) -> Vec<Geometry> {
-        // let grid = self.tracks[0].grid;
-        let background = self.grid.draw_background(bounds, &self.grid_cache);
-        let text_overlay = self.grid.draw_text_and_hover_overlay(bounds, cursor);
-
-        let trans = 0.25;
-        let yellow = Color::from_rgba(1.0, 1.0, 0.0, trans);
-        let dark_yellow = Color::from_rgba(0.5, 0.5, 0.0, trans);
+        let background = self.grid.draw_background(bounds, &self.grid_cache, theme);
+        let text_overlay = self.grid.draw_text_and_hover_overlay(bounds, cursor, theme);
 
         let notes_overlay = self.midi_notes.draw_notes(
             &self.grid,
             &bounds,
             &cursor,
             &self.notes_cache,
-            yellow,
-            trans,
+            theme,
+            false,
+            self.hovering_selected,
         );
 
         let selected_notes_elements = self.selected.notes.draw_notes(
@@ -1587,8 +1638,9 @@ impl canvas::Program<TrackMessage, PianoTheme> for Track {
             &bounds,
             &cursor,
             &self.selected_notes_cache,
-            dark_yellow,
-            trans,
+            theme,
+            true,
+            self.hovering_selected,
         );
 
         let selecting_box =

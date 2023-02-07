@@ -15,12 +15,12 @@ use iced::{
 use crate::grid::{Grid, GridInteraction};
 use crate::note::midi_notes::{
     ChangeSelection, MidiNote, MidiNotes, NoteEdge, NoteIndex, NoteInteraction, OverNote, Pitch,
-    Selected, WritingMode,
+    ResizedEdgePercent, ResizedEdges, Selected, WritingMode,
 };
 use crate::note::scale::{Scale, ScaleType};
 use crate::piano_theme::TrackTheme;
 
-use crate::config::{MAX_SCALING, MIN_SCALING};
+use crate::config::{MAX_SCALING, MIN_SCALING, RESIZE_LEN_RATIO_THRESHOLD};
 use crate::track::actions::{SelectionAction, TrackAction, TrackHistory};
 use crate::util::{History, TrackId};
 
@@ -29,11 +29,11 @@ pub type TrackElement<'a> = iced::Element<'a, TrackMessage, iced::Renderer<Track
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Drag {
     delta_pitch: i8,
-    delta_time: f32,
+    delta_times: f32,
 }
 
 impl Drag {
-    const ZERO: Self = Self { delta_pitch: 0, delta_time: 0.0 };
+    const ZERO: Self = Drag { delta_pitch: 0, delta_times: 0.0 };
 }
 
 pub struct Track {
@@ -53,7 +53,10 @@ pub struct Track {
     pub modifiers: keyboard::Modifiers,
     pub last_cursor_delta: Vector,
     pub last_delta_time: f32,
+
     pub drag: Drag,
+    pub resize_percent: ResizedEdgePercent,
+
     pub player_head: f32,
     pub hovering_selected: bool,
 
@@ -104,6 +107,8 @@ impl Track {
             last_cursor_delta: Vector::default(),
             last_delta_time: 0.0,
             drag: Drag::default(),
+            resize_percent: ResizedEdgePercent::default(),
+
             track_history: TrackHistory::default(),
             interaction: Interaction::default(),
             player_head: 3.0,
@@ -291,6 +296,23 @@ impl Track {
                         }
                     }
 
+                    ChangeSelection::UnselectMany { note_indices } => {
+                        // println!("Unselect Many");
+                        let mut new_indices = Vec::new();
+                        for note_index in note_indices {
+                            let note = self.selected.notes.remove(&note_index);
+                            let added_note = self.midi_notes.add(&note);
+                            new_indices.push(added_note.note_index_after);
+                        }
+
+                        if !history.is_dummy {
+                            self.track_history.add_selection(SelectionAction::UnselectMany {
+                                message: msg,
+                                new_indices,
+                            });
+                        }
+                    }
+
                     ChangeSelection::UnselectAllButOne { ref note_index } => {
                         // println!("Unselect All But One");
                         let selected_note = self.selected.notes.remove(note_index);
@@ -370,7 +392,7 @@ impl Track {
                 let (delta_time, delta_pitch) =
                     modified_notes.drag_all_notes(cursor_delta, &self.grid);
 
-                self.drag.delta_time = delta_time;
+                self.drag.delta_times = delta_time;
                 self.drag.delta_pitch = delta_pitch;
 
                 self.selected.notes.clear();
@@ -396,16 +418,28 @@ impl Track {
                 }
             }
 
-            TrackMessage::ResizedNotes { mut original_notes, delta_time, resize_end } => {
+            TrackMessage::ResizedNotes { mut original_notes, delta_time, resize_end, on_index } => {
+                println!("original_notes: {:?}", original_notes);
                 self.last_delta_time = delta_time;
-                let delta_time = original_notes.resize_all_notes(resize_end, delta_time);
-                self.drag.delta_time = delta_time;
+
+                // let delta_times = match resize_end {
+                //     NoteEdge::Start => ResizedEdges::new(delta_time, 0.0),
+                //     NoteEdge::End => ResizedEdges::new(0.0, delta_time),
+                //     NoteEdge::None => ResizedEdges::ZERO,
+                // };
+
+                let edge_percent =
+                    original_notes.resize_all_notes(delta_time, resize_end, on_index);
+
+                self.drag.delta_times = delta_time;
+                self.resize_percent = edge_percent;
+
                 self.selected.notes = original_notes;
 
                 self.selected_notes_cache.clear();
             }
 
-            TrackMessage::FinishResizingNotes { delta_time, resize_end } => {
+            TrackMessage::FinishResizingNotes { resize_percent: note_used } => {
                 let resized_conflicts = self.selected.notes.resolve_self_resize_conflicts();
                 let conflicts = self.midi_notes.resolve_conflicts(&self.selected.notes);
                 self.selected_notes_cache.clear();
@@ -418,7 +452,9 @@ impl Track {
                         // resize_end,
                         resized_conflicts,
                         conflicts,
-                        message: TrackMessage::FinishResizingNotes { delta_time, resize_end },
+                        message: TrackMessage::FinishResizingNotes {
+                            resize_percent: self.resize_percent,
+                        },
                     });
                 }
             }
@@ -664,25 +700,34 @@ impl Track {
     }
 
     pub fn handle_resizing(
-        &mut self,
+        &self,
         music_scale_cursor: Point,
     ) -> (event::Status, Option<TrackMessage>) {
-        if let NoteInteraction::Resizing { initial_cursor_pos, original_notes, resize_end } =
-            &mut self.interaction.note_interaction
+        if let NoteInteraction::Resizing {
+            initial_cursor_pos,
+            original_notes,
+            resize_end,
+            on_index,
+        } = &self.interaction.note_interaction
         {
-            let cursor_delta = music_scale_cursor - *initial_cursor_pos;
+            let mut cursor_delta_x = music_scale_cursor.x - initial_cursor_pos.x;
 
-            if cursor_delta.x == self.last_delta_time {
+            // snap to grid if alt is not pressed
+            if !self.modifiers.alt() {
+                cursor_delta_x = self.nearest_beat(cursor_delta_x);
+            };
+
+            if cursor_delta_x == self.last_delta_time {
                 return (event::Status::Ignored, None);
             }
-            println!("resized: {}", cursor_delta.x);
 
             return (
                 event::Status::Captured,
                 Some(TrackMessage::ResizedNotes {
-                    delta_time: cursor_delta.x,
+                    delta_time: cursor_delta_x,
                     original_notes: original_notes.clone(),
                     resize_end: resize_end.clone(),
+                    on_index: *on_index,
                 }),
             );
         } else {
@@ -721,30 +766,43 @@ impl Track {
         }
     }
 
+    // TODO: snap
     pub fn handle_dragging(
         &mut self,
         projected_cursor: Point,
+        music_scale_cursor: Point,
     ) -> (event::Status, Option<TrackMessage>) {
-        if let NoteInteraction::Dragging { initial_cursor_pos, original_notes } =
-            &self.interaction.note_interaction
+        if let NoteInteraction::Dragging {
+            initial_cursor_pos,
+            init_music_scale_cursor,
+            original_notes,
+        } = &self.interaction.note_interaction
         {
-            let mut floor_cursor = Vector::new(projected_cursor.x, projected_cursor.y.floor());
-            let mut floor_initial_cursor =
-                Vector::new(initial_cursor_pos.x, initial_cursor_pos.y.floor());
+            // let mut floor_cursor = Vector::new(projected_cursor.x, projected_cursor.y.floor());
+            // let mut floor_initial_cursor =
+            //     Vector::new(initial_cursor_pos.x, initial_cursor_pos.y.floor());
 
-            let mut cursor_delta: Vector = (projected_cursor - *initial_cursor_pos).into();
+            let mut cursor_delta: Vector = Vector::new(
+                music_scale_cursor.x - init_music_scale_cursor.x,
+                projected_cursor.y - initial_cursor_pos.y,
+            );
 
             // snap to beat
-            if !self.modifiers.alt() {
-                // music_floor_cursor.x = music_floor_cursor.x.floor();
-                // music_floor_initial_cursor.x = music_floor_initial_cursor.x.floor();
-                // music_cursor_delta =
-                //     (music_floor_cursor - music_floor_initial_cursor).into();
 
-                floor_cursor.x = floor_cursor.x.floor();
-                floor_initial_cursor.x = floor_initial_cursor.x.floor();
-                cursor_delta = (floor_cursor - floor_initial_cursor).into();
-            }
+            if !self.modifiers.alt() {
+                cursor_delta.x = self.nearest_beat(cursor_delta.x);
+            };
+
+            // if !self.modifiers.alt() {
+            // music_floor_cursor.x = music_floor_cursor.x.floor();
+            // music_floor_initial_cursor.x = music_floor_initial_cursor.x.floor();
+            // music_cursor_delta =
+            //     (music_floor_cursor - music_floor_initial_cursor).into();
+
+            // floor_cursor.x = floor_cursor.x.floor();
+            // floor_initial_cursor.x = floor_initial_cursor.x.floor();
+            // cursor_delta = (floor_cursor - floor_initial_cursor).into();
+            // }
 
             // TODO: check if the notes actually changed position,
             // if they didn't, don't send a message!!!
@@ -826,7 +884,7 @@ impl Track {
                     return Some(self.handle_selecting(projected_cursor, music_scale_cursor));
                 }
                 NoteInteraction::Dragging { .. } => {
-                    return Some(self.handle_dragging(projected_cursor));
+                    return Some(self.handle_dragging(projected_cursor, music_scale_cursor));
                 }
 
                 _ => {}
@@ -862,14 +920,91 @@ impl Track {
 
         if let Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) = event {
             // Check if a Selected note has been clicked
-            if let Some(OverNote { note_index: _, note_edge }) =
+            if let Some(OverNote { note_index, note_edge }) =
                 self.selected.notes.get_note_under_cursor(&self.grid, music_scale_cursor)
             {
+                println!("hell");
                 let new_selection = self.selected.notes.clone();
 
-                self.interaction.drag_or_resize(note_edge, projected_cursor, new_selection);
+                self.interaction.drag_or_resize(
+                    note_edge,
+                    projected_cursor,
+                    music_scale_cursor,
+                    new_selection,
+                    note_index,
+                    false,
+                );
+
+                if let NoteInteraction::Resizing { on_index, .. } =
+                    &self.interaction.note_interaction
+                {
+                    // find the indices of the notes that have a large difference in length compared to the note
+                    // being clicked on
+                    let note = self.selected.notes.get(*on_index);
+                    let length = note.end - note.start;
+
+                    let mut note_indices = vec![];
+
+                    let inverse_len_ratio = 1.0 / RESIZE_LEN_RATIO_THRESHOLD;
+                    let mut selected_clone = self.selected.notes.clone();
+
+                    for (pitch_index, note_vec) in self.selected.notes.notes.iter().enumerate() {
+                        for (time_index, note) in note_vec.iter().enumerate() {
+                            let len_ration = (note.end - note.start) / length;
+                            if len_ration > RESIZE_LEN_RATIO_THRESHOLD
+                                || len_ration < inverse_len_ratio
+                            {
+                                let local_note_index = NoteIndex { pitch_index, time_index };
+                                note_indices.push(local_note_index);
+                                selected_clone.remove(&local_note_index);
+                            }
+                        }
+                    }
+
+                    if let Some(OverNote { note_index, note_edge }) =
+                        self.selected.notes.get_note_under_cursor(&self.grid, music_scale_cursor)
+                    {
+                        self.interaction.note_interaction = NoteInteraction::Resizing {
+                            initial_cursor_pos: projected_cursor,
+                            original_notes: selected_clone,
+                            resize_end: note_edge,
+                            on_index: note_index,
+                        };
+
+                        return Some((
+                            event::Status::Captured,
+                            Some(TrackMessage::UpdateSelection {
+                                change_selection: ChangeSelection::UnselectMany { note_indices },
+                            }),
+                        ));
+                    }
+                }
 
                 return Some((event::Status::Captured, None));
+            } else if let Some(OverNote { note_index, note_edge }) =
+                self.midi_notes.get_note_under_cursor(&self.grid, music_scale_cursor)
+            {
+                //
+                // let original_note = self.midi_notes.get(note_index);
+                let mut original_notes = MidiNotes::new();
+                original_notes.add(self.midi_notes.get(note_index));
+
+                self.interaction.drag_or_resize(
+                    note_edge,
+                    projected_cursor,
+                    music_scale_cursor,
+                    original_notes,
+                    note_index,
+                    true,
+                );
+
+                println!("watson");
+                return Some((
+                    event::Status::Captured,
+                    Some(TrackMessage::UpdateSelection {
+                        change_selection: ChangeSelection::SelectOne { note_index },
+                    }),
+                ));
             }
         }
 
@@ -945,6 +1080,7 @@ impl Track {
 
             let period = self.grid.beat_fraction;
             let start = (music_scale_cursor.x / period).floor() * period;
+
             let end = start + period;
 
             let note = MidiNote::new(start, end, pitch);
@@ -954,6 +1090,11 @@ impl Track {
                 Some(TrackMessage::AddNote { note, add_mode: AddMode::Drain }),
             );
         }
+    }
+
+    fn nearest_beat(&self, x: f32) -> f32 {
+        let period = self.grid.beat_fraction;
+        (x / period).round() * period
     }
 
     fn init_pen_or_select(
@@ -1002,6 +1143,8 @@ impl Track {
                     new_selected.clear();
                     new_selected.add(&note);
 
+                    println!("SELECT ONE: {:?} ", note_index);
+
                     (
                         event::Status::Captured,
                         Some(TrackMessage::UpdateSelection {
@@ -1010,7 +1153,14 @@ impl Track {
                     )
                 };
 
-                self.interaction.drag_or_resize(note_edge, projected_cursor, new_selected);
+                self.interaction.drag_or_resize(
+                    note_edge,
+                    projected_cursor,
+                    music_scale_cursor,
+                    new_selected,
+                    note_index,
+                    true,
+                );
 
                 return Some(message);
             }
@@ -1073,12 +1223,12 @@ impl Track {
                 } => {
                     self.interaction.note_interaction = NoteInteraction::None;
                     let delta_time = music_scale_cursor.x - init_cursor.x;
-
+                    let delta_times = ResizedEdges::from_end(delta_time);
                     return Some((
                         event::Status::Captured,
                         Some(TrackMessage::FinishResizingNotes {
-                            delta_time,
-                            resize_end: NoteEdge::End,
+                            resize_percent: ResizedEdgePercent::from_end(delta_time),
+                            // resize_end: NoteEdge::End,
                         }),
                     ));
                 }
@@ -1123,18 +1273,20 @@ impl Track {
                         }),
                     ));
                 }
-                NoteInteraction::Resizing { resize_end, .. } => {
+                NoteInteraction::Resizing { .. } => {
                     self.interaction.note_interaction = NoteInteraction::None;
 
-                    if self.drag.delta_time == 0.0 {
+                    if self.drag.delta_times == 0.0 {
                         return Some((event::Status::Ignored, None));
                     }
 
-                    let delta_time = self.drag.delta_time;
+                    // let delta_times = self.drag.delta_times;
 
                     return Some((
                         event::Status::Captured,
-                        Some(TrackMessage::FinishResizingNotes { delta_time, resize_end }),
+                        Some(TrackMessage::FinishResizingNotes {
+                            resize_percent: self.resize_percent,
+                        }),
                     ));
                 }
 
@@ -1218,7 +1370,7 @@ impl Track {
 
                 let note = MidiNote::new(start, end, pitch);
                 let mut notes = MidiNotes::new();
-                notes.add(&note);
+                let added_note = notes.add(&note);
 
                 let delta_time = music_scale_cursor.x - init_cursor.x;
 
@@ -1228,6 +1380,10 @@ impl Track {
                         delta_time,
                         original_notes: notes,
                         resize_end: NoteEdge::End,
+                        on_index: NoteIndex {
+                            pitch_index: added_note.note_index_after.pitch_index,
+                            time_index: 0,
+                        },
                     }),
                 ));
             }
@@ -1418,21 +1574,52 @@ pub enum AddMode {
 
 #[derive(Clone, Debug)]
 pub enum TrackMessage {
-    Translated { translation: Vector },
-    Scaled { scaling: Vector, translation: Option<Vector> },
-    AddNote { note: MidiNote, add_mode: AddMode }, // bool: first_note_of_write_mode
-    AddManyNotes { notes: MidiNotes },
+    Translated {
+        translation: Vector,
+    },
+    Scaled {
+        scaling: Vector,
+        translation: Option<Vector>,
+    },
+    AddNote {
+        note: MidiNote,
+        add_mode: AddMode,
+    }, // bool: first_note_of_write_mode
+    AddManyNotes {
+        notes: MidiNotes,
+    },
     CursorMoved,
     DeleteSelectedNotes,
-    DeleteOne { note_index_before: NoteIndex, is_selected: bool },
-    UpdateSelection { change_selection: ChangeSelection },
-    Dragged { cursor_delta: Vector, original_notes: MidiNotes },
-    FinishDragging { drag: Drag, scale: Scale },
+    DeleteOne {
+        note_index_before: NoteIndex,
+        is_selected: bool,
+    },
+    UpdateSelection {
+        change_selection: ChangeSelection,
+    },
+    Dragged {
+        cursor_delta: Vector,
+        original_notes: MidiNotes,
+    },
+    FinishDragging {
+        drag: Drag,
+        scale: Scale,
+    },
 
-    ResizedNotes { delta_time: f32, original_notes: MidiNotes, resize_end: NoteEdge },
-    FinishResizingNotes { delta_time: f32, resize_end: NoteEdge },
+    ResizedNotes {
+        delta_time: f32,
+        original_notes: MidiNotes,
+        resize_end: NoteEdge,
+        on_index: NoteIndex,
+    },
+    FinishResizingNotes {
+        resize_percent: ResizedEdgePercent,
+    },
 
-    Selecting { selecting_square: Rectangle, direct_selecting_square: Rectangle },
+    Selecting {
+        selecting_square: Rectangle,
+        direct_selecting_square: Rectangle,
+    },
     // FinishSelecting {
     //     selecting_square: Rectangle,
     //     // keep_already_selected: bool,
@@ -1445,7 +1632,11 @@ pub enum TrackMessage {
 
     // Cut,
     // Paste,
-    Canvas { event: Event, bounds: Rectangle, cursor: Cursor },
+    Canvas {
+        event: Event,
+        bounds: Rectangle,
+        cursor: Cursor,
+    },
 }
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq)]
@@ -1475,14 +1666,30 @@ impl Interaction {
         &mut self,
         note_edge: NoteEdge,
         cursor: Point,
+        music_scale_cursor: Point,
         original_notes: MidiNotes,
+        mut on_index: NoteIndex,
+        is_single_note: bool,
     ) {
         match note_edge {
             //
             // start dragging
             NoteEdge::None => {
-                self.note_interaction =
-                    NoteInteraction::Dragging { initial_cursor_pos: cursor, original_notes };
+                self.note_interaction = NoteInteraction::Dragging {
+                    initial_cursor_pos: cursor,
+                    init_music_scale_cursor: music_scale_cursor,
+                    original_notes,
+                };
+            }
+
+            note_edge if is_single_note => {
+                on_index.time_index = 0;
+                self.note_interaction = NoteInteraction::Resizing {
+                    initial_cursor_pos: cursor,
+                    original_notes,
+                    resize_end: note_edge,
+                    on_index,
+                };
             }
 
             //
@@ -1492,6 +1699,7 @@ impl Interaction {
                     initial_cursor_pos: cursor,
                     original_notes,
                     resize_end: note_edge,
+                    on_index,
                 };
             }
         }

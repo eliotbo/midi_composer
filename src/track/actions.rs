@@ -1,4 +1,6 @@
-use crate::note::midi_notes::{ChangeSelection, MidiNote, MidiNotes, NoteEdge, NoteIndex};
+use crate::note::midi_notes::{
+    ChangeSelection, MidiNote, MidiNotes, NoteEdge, NoteIndex, ResizedEdges,
+};
 // use crate::track::undoredo::{AddedNote, ResizedConflicts, TrackHistory};
 use crate::track::{AddMode, Track, TrackMessage};
 use crate::util::History;
@@ -72,8 +74,7 @@ impl ConflictHistory {
 #[derive(Debug, Clone)]
 pub struct ResizedConflicts {
     pub note_index: NoteIndex,
-    pub edge: NoteEdge,
-    pub delta_time: f32,
+    pub delta_times: ResizedEdges,
 }
 
 #[derive(Debug, Clone)]
@@ -143,6 +144,10 @@ pub enum SelectionAction {
         message: TrackMessage,
         new_index: NoteIndex,
     },
+    UnselectMany {
+        message: TrackMessage,
+        new_indices: Vec<NoteIndex>,
+    },
     UnselectAllButOne {
         message: TrackMessage,
         new_indices: Vec<NoteIndex>,
@@ -177,7 +182,7 @@ impl TrackAction {
             let note_index = resized_note.note_index;
             let note = &mut track.midi_notes.notes[note_index.pitch_index][note_index.time_index];
 
-            note.resize(resized_note.edge, -resized_note.delta_time);
+            note.resize(-resized_note.delta_times);
         }
     }
 
@@ -191,7 +196,7 @@ impl TrackAction {
             let note =
                 &mut track.selected.notes.notes[note_index.pitch_index][note_index.time_index];
 
-            note.resize(resized_note.edge, -resized_note.delta_time);
+            note.resize(-resized_note.delta_times);
         }
     }
 
@@ -237,7 +242,7 @@ impl TrackAction {
 
                 for v in modified_notes.notes.iter_mut() {
                     for note in v.iter_mut() {
-                        note.reposition(-drag.delta_pitch, -drag.delta_time, &scale);
+                        note.reposition(-drag.delta_pitch, -drag.delta_times, &scale);
                     }
                 }
 
@@ -250,13 +255,13 @@ impl TrackAction {
             }
 
             TrackAction::ResizedNotes {
-                message: TrackMessage::FinishResizingNotes { delta_time, resize_end },
+                message: TrackMessage::FinishResizingNotes { resize_percent },
                 resized_conflicts,
                 conflicts,
             } => {
                 for notes_in_pitch in track.selected.notes.notes.iter_mut() {
                     for note in notes_in_pitch.iter_mut() {
-                        note.resize(*resize_end, -delta_time);
+                        note.resize_with_percent(-*resize_percent);
                     }
                 }
 
@@ -266,7 +271,7 @@ impl TrackAction {
                     let note = &mut track.selected.notes.notes[note_index.pitch_index]
                         [note_index.time_index];
 
-                    note.resize(conflict.edge, -conflict.delta_time);
+                    note.resize(-conflict.delta_times);
                 }
 
                 // handle conflicts between selected notes and non-selected notes
@@ -289,6 +294,10 @@ impl TrackAction {
                         let note = track.midi_notes.remove(new_index);
                         track.selected.notes.add(&note);
                     }
+                    SelectionAction::SelectManyNotes { new_indices, .. } => {
+                        let notes = track.midi_notes.remove_notes(new_indices);
+                        track.selected.notes.add_midi_notes(&notes);
+                    }
                     SelectionAction::UnselectAllButOne { new_indices, new_note_index, .. } => {
                         let note = track.selected.notes.remove(new_note_index);
                         let removed_notes = track.midi_notes.remove_notes(new_indices);
@@ -304,7 +313,7 @@ impl TrackAction {
                         let notes = track.selected.notes.remove_notes(new_indices);
                         track.midi_notes.add_midi_notes(&notes);
                     }
-                    SelectionAction::SelectManyNotes { new_indices, .. } => {
+                    SelectionAction::UnselectMany { new_indices, .. } => {
                         let notes = track.selected.notes.remove_notes(new_indices);
                         track.midi_notes.add_midi_notes(&notes);
                     }
@@ -345,7 +354,7 @@ impl TrackAction {
 
                     for v in modified_notes.notes.iter_mut() {
                         for note in v.iter_mut() {
-                            note.reposition(drag.delta_pitch, drag.delta_time, &scale);
+                            note.reposition(drag.delta_pitch, drag.delta_times, &scale);
                         }
                     }
 
@@ -360,10 +369,10 @@ impl TrackAction {
             }
             TrackAction::ResizedNotes { message, .. } => {
                 // track.update(message, dummy_history)
-                if let TrackMessage::FinishResizingNotes { delta_time, resize_end } = message {
+                if let TrackMessage::FinishResizingNotes { resize_percent } = message {
                     for notes_in_pitch in track.selected.notes.notes.iter_mut() {
                         for note in notes_in_pitch.iter_mut() {
-                            note.resize(*resize_end, *delta_time);
+                            note.resize_with_percent(*resize_percent);
                         }
                     }
                     track.selected.notes.resolve_self_resize_conflicts();
@@ -382,6 +391,9 @@ impl TrackAction {
                     track.update(&message, dummy_history);
                 }
                 SelectionAction::UnselectOne { message, .. } => {
+                    track.update(&message, dummy_history);
+                }
+                SelectionAction::UnselectMany { message, .. } => {
                     track.update(&message, dummy_history);
                 }
 

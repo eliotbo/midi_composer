@@ -14,3 +14,9 @@ pub const INIT_SCALING: Vector = Vector::new(1.0, 1.0);
 pub const INIT_GRID_SIZE: Size = Size::new(500.0, 300.0);
 
 pub const INIT_PITCH_POS: f32 = 27.0;
+pub const NOTE_MIN_SIZE: f32 = 0.015625; // 1/64th note
+
+// when resizing many selected notes, unselect those that have a
+// length either much smaller or much larger than the length of
+// the clicked note
+pub const RESIZE_LEN_RATIO_THRESHOLD: f32 = 8.0;

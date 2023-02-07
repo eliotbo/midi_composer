@@ -1,5 +1,5 @@
 use iced::widget::canvas::{Cache, Cursor, Frame, Geometry, Text};
-use iced::{alignment, Color, Point, Rectangle, Size, Vector};
+use iced::{alignment, keyboard::Modifiers, Color, Point, Rectangle, Size, Vector};
 
 use std::ops::RangeInclusive;
 
@@ -84,6 +84,7 @@ impl Grid {
 
         let p_sign = if point.y >= 0.0 { 1.0 } else { -1.0 };
         point.y = p_sign * (a as f32 + self.scale.midi_range[b as usize] as f32 + y_frac);
+
         point
     }
 

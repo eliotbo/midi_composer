@@ -6,12 +6,12 @@ use crate::track::TimingInfo;
 // use iced::keyboard::Modifiers;
 use iced::widget::canvas::event::{self};
 use iced::widget::canvas::{Cache, Cursor, Geometry, Path, Stroke};
-use iced::{Color, Point, Rectangle, Size, Vector};
+use iced::{Color, Point, Rectangle, Size, Vector, keyboard::Modifiers};
 
 use std::fmt;
 
 use super::scale::Scale;
-use crate::config::{BEAT_SIZE, NOTE_LABELS, RESIZE_BOX_PIXEL_WIDTH};
+use crate::config::{BEAT_SIZE, NOTE_LABELS, RESIZE_BOX_PIXEL_WIDTH, NOTE_MIN_SIZE};
 use crate::piano_theme::TrackTheme;
 use crate::track::{AddMode, Pending, TrackMessage};
 
@@ -325,10 +325,11 @@ impl MidiNotes {
                         break;
                     } else {
                         // add local conflict
+                        let delta_times = ResizedEdges::from_end(next_note.start - note.end);
                         let local_conflict = ResizedConflicts {
                             note_index: NoteIndex { pitch_index: pitch_index, time_index: i },
-                            edge: NoteEdge::End,
-                            delta_time: next_note.start - note.end, // delta time should be negative
+                            // edge: NoteEdge::End,
+                            delta_times , // delta time should be negative
                         };
                         note.end = next_note.start;
                         all_conflicts.push(local_conflict);
@@ -393,15 +394,15 @@ impl MidiNotes {
         if time_index > 0 {
             let curr = &mut self.notes[pitch][time_index - 1];
             if note.start < curr.end {
-                // println!("conflict: RESIZING");
-                let delta_time = note.start - curr.end;
+                let delta_time0 = note.start - curr.end;
+                let delta_times = ResizedEdges::from_end(delta_time0);
                 resized_notes.push(ResizedConflicts {
                     note_index: NoteIndex {
                         pitch_index: pitch,
                         time_index: (time_index - 1) as usize,
                     },
-                    edge: NoteEdge::End,
-                    delta_time: delta_time,
+
+                    delta_times,
                 });
                 curr.end = note.start;
             }
@@ -420,11 +421,11 @@ impl MidiNotes {
             // overlaps partly
             if note.end > curr.start && note.end < curr.end {
                 // println!("conflict: RESIZING2");
-                let delta_time = note.end - curr.start;
+                let delta_time1 = note.end - curr.start;
+                let delta_times = ResizedEdges::from_start(delta_time1);
                 resized_notes.push(ResizedConflicts {
                     note_index: NoteIndex { pitch_index: pitch, time_index: i },
-                    edge: NoteEdge::Start,
-                    delta_time,
+                    delta_times,
                 });
                 curr.start = note.end;
                 break;
@@ -737,6 +738,7 @@ impl MidiNotes {
         if new_start < 1.0 {
             delta_time = 1.0 - note_with_minimum_start.start;
         }
+        // let delta_times = ResizedEdges::splat(delta_time);
 
         // min pitch
         //
@@ -773,19 +775,32 @@ impl MidiNotes {
     }
 
     // TODO: optimize this.
-    pub fn resize_all_notes(&mut self, resize_end: NoteEdge, delta_time: f32) -> f32 {
+    pub fn resize_all_notes(&mut self,  delta_time: f32, resize_end: NoteEdge, on_index: NoteIndex) -> ResizedEdgePercent {
         //
-        for notes_in_pitch in self.notes.iter_mut() {
-            for note in notes_in_pitch.iter_mut() {
+        // resize the note that was clicked on first, and compute the % of change in length
+        // so that we can resize all other notes by the same amount
+        // let mut delta_times = delta_times;
+
+        let resized_edge_percent: ResizedEdgePercent = self.notes[on_index.pitch_index][on_index.time_index].resize_single_and_get_percent(delta_time,resize_end, on_index);
+
+       
+
+        for (pitch_index, notes_in_pitch) in self.notes.iter_mut().enumerate() {
+            for (time_index, note) in notes_in_pitch.iter_mut().enumerate() {
+
+                // continue if the note has index on_index
+                if pitch_index == on_index.pitch_index && time_index == on_index.time_index {
+                    continue;
+                }
                 //
                 // apply transformation to all notes
-                note.resize(resize_end, delta_time);
+                note.resize_with_percent(resized_edge_percent);
             }
         }
-        delta_time
+        resized_edge_percent
     }
 
-    // TODO: optimize using only the notes that can be currently viewed
+    // TODO: OPTIMIZE using only the notes that can be currently viewed
     pub fn on_note(&self, grid: &Grid, music_scale_cursor: Point) -> bool {
         // let mut resize_end = NoteEdge::None;
 
@@ -1049,23 +1064,122 @@ impl MidiNote {
         return new_pitch as i8 - chromatic_starting_pitch as i8;
     }
 
-    pub fn resize(&mut self, resize_end: NoteEdge, delta_time: f32) {
+    pub fn resize_single_and_get_percent(&mut self, delta_time: f32, resize_end: NoteEdge, note_index: NoteIndex) -> ResizedEdgePercent {
+        let before = self.clone();
+        let original_note_length = self.end - self.start;
+
+               
         let mut new_end_time = self.end;
         let mut new_start_time = self.start;
+
+        let mut new_legnth_to_old_length = 1.0;
+        
+
+
         match resize_end {
             NoteEdge::Start => {
                 new_start_time = self.start + delta_time;
+                new_legnth_to_old_length = (self.end - new_start_time) / original_note_length;
+
+                if new_start_time == self.end {
+                    new_start_time = self.end - NOTE_MIN_SIZE;
+                    new_legnth_to_old_length = NOTE_MIN_SIZE / original_note_length;
+                } else if new_start_time > self.end {
+                    new_end_time = new_start_time;
+                    new_start_time = self.end;
+                    new_legnth_to_old_length = (new_start_time - new_end_time) / original_note_length;
+                }
             }
             NoteEdge::End => {
                 new_end_time = self.end + delta_time;
+                new_legnth_to_old_length = (new_end_time - self.start) / original_note_length;
+
+                if new_end_time == self.start {
+                    new_end_time = self.start + NOTE_MIN_SIZE;
+                    new_legnth_to_old_length = NOTE_MIN_SIZE / original_note_length;
+                } else if new_end_time < self.start {
+                    new_start_time = new_end_time;
+                    new_end_time = self.start;
+                    new_legnth_to_old_length = (new_start_time - new_end_time) / original_note_length;
+                }
             }
             _ => {}
         }
+
+        // let start_time = new_start_time.min(new_end_time).max(1.0);
+        // let end_time = new_start_time.max(new_end_time);
+
+        
+
+        *self = MidiNote::new(new_start_time, new_end_time, self.pitch);
+
+        println!("percent: {}", new_legnth_to_old_length);
+
+        return ResizedEdgePercent {
+            edge: resize_end,
+            percent: new_legnth_to_old_length,
+        };
+    }
+
+    pub fn resize_with_percent(&mut self, percent: ResizedEdgePercent ) {
+        let before = self.clone();
+        let original_note_length = self.end - self.start;
+
+        let mut new_end_time = self.end;
+        let mut new_start_time = self.start;
+
+        match percent.edge {
+            NoteEdge::Start => {
+                new_start_time = self.end - (original_note_length * percent.percent);
+                if new_start_time == self.end {
+                    new_start_time = self.end - NOTE_MIN_SIZE;
+                } else if new_start_time > self.end {
+                    new_end_time = new_start_time;
+                    new_start_time = self.end;
+                }
+            }
+            NoteEdge::End => {
+                new_end_time = self.start + (original_note_length * percent.percent);
+                if new_end_time == self.start {
+                    new_end_time = self.start + NOTE_MIN_SIZE;
+                } else if new_end_time < self.start {
+                    new_start_time = new_end_time;
+                    new_end_time = self.start;
+                }
+            }
+            _ => {}
+        }
+
+        *self = MidiNote::new(new_start_time, new_end_time, self.pitch);
+    }
+
+
+    pub fn resize(&mut self,  delta_times: ResizedEdges) -> ResizedEdges {
+        let before = self.clone();
+        let mut new_end_time = self.end;
+        let mut new_start_time = self.start;
+        new_start_time = self.start + delta_times.start;
+        new_end_time = self.end + delta_times.end;
+
+        // match resize_end {
+        //     NoteEdge::Start => {
+        //         new_start_time = self.start + delta_time;
+        //     }
+        //     NoteEdge::End => {
+        //         new_end_time = self.end + delta_time;
+        //     }
+        //     _ => {}
+        // }
 
         let start_time = new_start_time.min(new_end_time).max(1.0);
         let end_time = new_start_time.max(new_end_time);
 
         *self = MidiNote::new(start_time, end_time, self.pitch);
+
+        return ResizedEdges {
+            start: self.start - before.start,
+            end: self.end - before.end,
+        };
     }
 
     pub fn to_label(&self) -> String {
@@ -1126,6 +1240,8 @@ pub enum ChangeSelection {
     AddOneToSelected { note_index: NoteIndex },
     // Move one note from the Selected MidiNotes to the main MidiNotes
     UnselectOne { note_index: NoteIndex },
+    // Move multiple notes from the main MidiNotes to the Selected MidiNotes
+    UnselectMany { note_indices: Vec<NoteIndex>},
     // Keep only one note in the Selected MidiNotes
     UnselectAllButOne { note_index: NoteIndex },
     // Drain the Selected notes and add one note from the main notes to the Selected note
@@ -1221,10 +1337,10 @@ pub enum WritingMode {
 #[derive(Clone, Debug)]
 pub enum NoteInteraction {
     None,
-    Dragging { initial_cursor_pos: Point, original_notes: MidiNotes },
+    Dragging { initial_cursor_pos: Point, init_music_scale_cursor: Point, original_notes: MidiNotes },
     Delete { notes_to_delete: Vec<(usize, usize)> },
 
-    Resizing { initial_cursor_pos: Point, original_notes: MidiNotes, resize_end: NoteEdge },
+    Resizing { initial_cursor_pos: Point, original_notes: MidiNotes, resize_end: NoteEdge, on_index: NoteIndex },
     ResizingHover,
     EitherSelectingOrSettingPlayerHead { initial_music_cursor: Point },
     Selecting { initial_music_cursor: Point, initial_cursor_proj: Point },
@@ -1275,3 +1391,114 @@ pub enum NoteEdge {
     End,
     None,
 }
+
+impl Default for NoteEdge {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+
+impl NoteEdge {
+    pub fn other(&self) -> Self {
+        match self {
+            Self::Start => Self::End,
+            Self::End => Self::Start,
+            Self::None => Self::None,
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, Default, PartialEq)]
+pub struct ResizedEdges {
+    pub start: f32,
+    pub end: f32,
+}
+
+
+
+use std::ops::Neg;
+
+impl Neg for ResizedEdges {
+    type Output = Self;
+
+    fn neg(self) -> Self::Output {
+        Self {
+            start: -self.start,
+            end: -self.end,
+        }
+    }
+}
+
+impl ResizedEdges {
+    pub const ZERO: Self = Self { start: 0.0, end: 0.0 };
+    pub fn new(start: f32, end: f32) -> Self {
+        Self { start, end }
+    }
+    pub fn from_end(end: f32) -> Self {
+        Self { start: 0.0, end }
+    }
+
+    pub fn from_start(start: f32) -> Self {
+        Self { start, end: 0.0 }
+    }
+    pub fn splat(value: f32) -> Self {
+        Self { start: value, end: value }
+    }
+}
+
+
+
+#[derive(Debug, Copy, Clone,  PartialEq)]
+pub struct ResizedEdgePercent {
+    pub edge: NoteEdge,
+    pub percent: f32,
+}
+
+impl Default for ResizedEdgePercent {
+    fn default() -> Self {
+        Self { edge: NoteEdge::None, percent: 1.0 }
+    }
+}
+
+
+
+impl Neg for ResizedEdgePercent {
+    type Output = Self;
+
+    fn neg(self) -> Self::Output {
+
+        if self.percent >= 0.0 {
+            return Self {
+                edge: self.edge,
+                percent: 1.0 /self.percent,
+            };
+        } else {
+            return Self {
+                edge: self.edge.other(),
+                percent: 1.0 / self.percent,
+            };
+        }
+
+        // Self {
+        //     edge: self.edge.other(),
+        //     percent: -self.percent,
+        // }
+    }
+}
+
+impl ResizedEdgePercent {
+    pub const ZERO: Self = Self { edge: NoteEdge::None, percent: 0.0 };
+    pub fn new(percent: f32, edge: NoteEdge) -> Self {
+        Self { edge, percent }
+    }
+    pub fn from_end(end: f32) -> Self {
+        Self { edge: NoteEdge::End, percent: end }
+    }
+
+    pub fn from_start( start: f32) -> Self {
+        Self { edge: NoteEdge::Start, percent: start }
+    }
+
+}
+

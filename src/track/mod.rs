@@ -419,7 +419,7 @@ impl Track {
             }
 
             TrackMessage::ResizedNotes { mut original_notes, delta_time, resize_end, on_index } => {
-                println!("original_notes: {:?}", original_notes);
+                // println!("original_notes: {:?}", original_notes);
                 self.last_delta_time = delta_time;
 
                 // let delta_times = match resize_end {
@@ -923,7 +923,7 @@ impl Track {
             if let Some(OverNote { note_index, note_edge }) =
                 self.selected.notes.get_note_under_cursor(&self.grid, music_scale_cursor)
             {
-                println!("hell");
+                // println!("hell");
                 let new_selection = self.selected.notes.clone();
 
                 self.interaction.drag_or_resize(
@@ -949,13 +949,14 @@ impl Track {
                     let mut selected_clone = self.selected.notes.clone();
 
                     for (pitch_index, note_vec) in self.selected.notes.notes.iter().enumerate() {
-                        for (time_index, note) in note_vec.iter().enumerate() {
+                        for (time_index, note) in note_vec.iter().enumerate().rev() {
                             let len_ration = (note.end - note.start) / length;
                             if len_ration > RESIZE_LEN_RATIO_THRESHOLD
                                 || len_ration < inverse_len_ratio
                             {
                                 let local_note_index = NoteIndex { pitch_index, time_index };
                                 note_indices.push(local_note_index);
+
                                 selected_clone.remove(&local_note_index);
                             }
                         }
@@ -1143,7 +1144,7 @@ impl Track {
                     new_selected.clear();
                     new_selected.add(&note);
 
-                    println!("SELECT ONE: {:?} ", note_index);
+                    // println!("SELECT ONE: {:?} ", note_index);
 
                     (
                         event::Status::Captured,

@@ -65,6 +65,7 @@ impl fmt::Debug for MidiNotes {
             let mut note_str = NOTE_LABELS[pitch_index].to_string();
             // insert octave number
             note_str.push_str(&(pitch as i16 / 12 - 2).to_string());
+            
             debug_string.push_str(&format!(
                 "pitch: {:?} => {:?} --> is sorted: {}\n",
                 note_str,
@@ -1113,7 +1114,7 @@ impl MidiNote {
 
         *self = MidiNote::new(new_start_time, new_end_time, self.pitch);
 
-        println!("percent: {}", new_legnth_to_old_length);
+        // println!("percent: {}", new_legnth_to_old_length);
 
         return ResizedEdgePercent {
             edge: resize_end,
